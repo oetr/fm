@@ -4,14 +4,13 @@
 
 (require ffi/unsafe
          "./unsafe/tensor.rkt"
-         "./internal/utilities.rkt")
+         "./private/utilities.rkt")
 
 (define+provide (tensor-length A) (apply * (tensor-shape A)))
 
 (define+provide (tensor-rank A) (length (tensor-shape A)))
 
-(define+provide
- (make-tensor shape (fill #f) #:type (type 'double) #:children (children empty))
+(define+provide (make-tensor shape (fill #f) #:type (type 'double) #:children (children empty))
  (when (for/or ([dim-length shape])
          (<= dim-length 0))
    (error 'make-tensor "dimensions should be >= 1"))
@@ -56,8 +55,7 @@
  ;; TODO: fill
  (tensor shape type data empty void children))
 
-(define+provide
- (tensor-requires-grad! T)
+(define+provide (tensor-requires-grad! T)
  (when (empty? (tensor-grad T))
    (set-tensor-grad! T (alloc-tensor (tensor-length T) #:type (symbol->type (tensor-type T))))
    (memset (tensor-grad T) 0 (tensor-length T) (symbol->type (tensor-type T)))))

@@ -4,7 +4,7 @@
 
 (require ffi/unsafe
          racket/struct
-         "../internal/utilities.rkt")
+         "../private/utilities.rkt")
 
 (define (tensor->print-shorted-lists A)
   (define shape (tensor-shape A))
@@ -48,7 +48,7 @@
       (list (assemble-indices data shape 0))
       (list (assemble-indices data shape 0)
             (assemble-indices grad shape 0))))
-              
+
 
 (define+provide (type->symbol a-type)
   (match a-type
