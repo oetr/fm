@@ -21,15 +21,15 @@
       [else (error "Unknown BLAS prefix: " p)]))
   
   (define (prefix->types p)
+    
     (define (syntax->symbols syntx)
-      (define str (symbol->string (syntax->datum syntx)))
-      (for/list ([i (in-range (string-length str))])
-        (string->symbol (substring str i (+ i 1)))))
+      (for/list ([c (symbol->string (syntax->datum syntx))])
+        (string->symbol (string c))))
+    
     (define prefix (syntax->symbols p))
     (when (> (length prefix) 2)
       (error "BLAS prefix cannot have more than 2 types: " (syntax->datum p)))
-    (for/fold ([T #f]
-               [R #f])
+    (for/fold ([T #f] [R #f])
               ([p prefix])
       (define type (prefix->type p))
       (if T
@@ -40,15 +40,23 @@
   (syntax-parse stx
     [(_ base:id (p:id ...) sig)
      (with-syntax ([(full ...)
-                    (for/list ([cblas-type (attribute p)])
-                      (format-id cblas-type #:source cblas-type
-                                 "cblas_~a~a" cblas-type #'base))]
+                    (let ()
+                      (define cblas-types (attribute p))
+                      (when (zero? (length cblas-types))
+                        (error 'define "Expected at least one cblas type"))
+                      (for/list ([cblas-type cblas-types])
+                        (format-id cblas-type #:source cblas-type
+                                   "cblas_~a~a" cblas-type #'base)))]
                    [(exp ...)
                     (for/list ([cblas-type (attribute p)])
                       (define-values (T R) (prefix->types cblas-type))
                       (let subst ([datum (syntax->datum #'sig)])
                         (cond [(eq? datum 'T) T]
-                              [(eq? datum 'R) R]
+                              [(eq? datum 'R)
+                               (unless R
+                                 (error 'define+provide-cblas*
+                                        "Cannot use 'R without providing a cblas return type (e.g. sc)"))
+                               R]
                               [(list? datum) (datum->syntax cblas-type (map subst datum))]
                               [else datum])))])
        #'(begin (provide full) ... (define-cblas-lib-internal full exp) ...))]))
