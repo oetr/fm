@@ -10,7 +10,8 @@
 
 (define+provide (tensor-rank A) (length (tensor-shape A)))
 
-(define+provide (make-tensor shape (fill #f) #:type (type 'double) #:children (children empty))
+(define+provide
+ (make-tensor shape (fill #f) #:type (type 'double) #:children (children empty))
  (when (for/or ([dim-length shape])
          (<= dim-length 0))
    (error 'make-tensor "dimensions should be >= 1"))
@@ -52,10 +53,12 @@
       (error 'make-tensor "fill value should be a byte, but is ~a~n" fill))
     (printf "fill real: ~a~n" fill-real)
     (memset data fill-real n-elements _type)])
- ;; TODO: fill
- (tensor shape type data empty void children))
+  ;; TODO: fill
+  (define strides (shape->strides shape))
+ (tensor shape strides type data empty void children))
 
-(define+provide (tensor-requires-grad! T)
+(define+provide
+ (tensor-requires-grad! T)
  (when (empty? (tensor-grad T))
    (set-tensor-grad! T (alloc-tensor (tensor-length T) #:type (symbol->type (tensor-type T))))
    (memset (tensor-grad T) 0 (tensor-length T) (symbol->type (tensor-type T)))))

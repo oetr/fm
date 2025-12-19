@@ -85,8 +85,7 @@
     [(== 'bool)       _stdbool]
     [_ (error 'symbol->type "unsupported type: ~a~n" a-symbol)]))
 
-
-(struct tensor (shape type data grad backward children)
+(struct tensor (shape strides type data grad backward children)
   #:mutable
   #:methods gen:custom-write
   [(define write-proc
@@ -94,7 +93,9 @@
       (lambda (A)
         (define shape (tensor-shape A))
         (define type (tensor-type A))
+        (define strides (tensor-strides A))
         (define data-grad (tensor->print-shorted-lists A))
+        ;; TODO: print correctly now using strides
         (if (= 1 (length data-grad))
             (format "tensor:~a ~a~n  ~a~n" type shape (car data-grad))
             (format "tensor:~a ~a~n  d: ~a~n  ∇: ~a~n" type shape (car data-grad) (cadr data-grad))))
@@ -111,4 +112,12 @@
   (cast (malloc n-elements type 'atomic-interior)
         _pointer
         _gcpointer))
+
+(define+provide (shape->strides shape)
+  (for/fold ([strides '()]
+             [running-product 1]
+             #:result strides)
+            ([dim (in-list (reverse shape))])
+    (values (cons running-product strides)
+            (* running-product dim))))
 
