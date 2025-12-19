@@ -41,7 +41,8 @@
     [(_ base:id (p:id ...) sig)
      (with-syntax ([(full ...)
                     (for/list ([cblas-type (attribute p)])
-                      (format-id cblas-type "cblas_~a~a" cblas-type #'base))]
+                      (format-id cblas-type #:source cblas-type
+                                 "cblas_~a~a" cblas-type #'base))]
                    [(exp ...)
                     (for/list ([cblas-type (attribute p)])
                       (define-values (T R) (prefix->types cblas-type))
