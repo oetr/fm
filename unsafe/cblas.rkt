@@ -4,7 +4,6 @@
 
 (require ffi/unsafe
          ffi/unsafe/define
-         "../private/utilities.rkt"
          (for-syntax racket/base   
                      racket/syntax 
                      syntax/parse))
