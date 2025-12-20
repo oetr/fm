@@ -1,7 +1,11 @@
 #+TITLE: fm: fast math for Racket
 
 * DONE Roadmap
-** TODO Add helper functions in C to speed things up
-*** TODO fm:arange for all types
-*** TODO fill floats/doubles, complex floats/doubles properly
-** TODO implement stride usage properly
+** Helper functions in C to speed things up
+- cmake script to get deps and compile
+- fm:arange for all types
+- fill floats/doubles, complex floats/doubles properly
+- matrix build for multiple archs
+
+** Backprop by autograd
+
