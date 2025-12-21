@@ -39,7 +39,7 @@
 
 (define-syntax (define+provide-cblas* stx)
   (syntax-parse stx
-    [(_ base:id (p:id ...) sig)
+    [(_ base:id (p:id ...+) sig)
      (with-syntax ([(full ...)
                     (let ()
                       (define cblas-types (attribute p))
