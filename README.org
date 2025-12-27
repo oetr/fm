@@ -2,10 +2,9 @@
 
 * DONE Roadmap
 ** Helper functions in C to speed things up
-- cmake script to get deps and compile
 - fm:arange for all types
-- fill floats/doubles, complex floats/doubles properly
 - matrix build for multiple archs
+- auto-build C helpers when installing
 
 ** Backprop by autograd
 
