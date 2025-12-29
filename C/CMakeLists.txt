@@ -6,14 +6,14 @@ set(CMAKE_C_VISIBILITY_PRESET hidden) # Hide internal symbols by default
 
 # Find Dependencies
 find_package(OpenMP REQUIRED)
-find_package(BLAS REQUIRED)
+# find_package(BLAS REQUIRED)
 
 # Define Library
 add_library(aux SHARED aux.c)
 
 target_link_libraries(aux PRIVATE 
     OpenMP::OpenMP_C 
-    ${BLAS_LIBRARIES}
+    # ${BLAS_LIBRARIES}
 )
 
 # Handle cross-platform PIC
