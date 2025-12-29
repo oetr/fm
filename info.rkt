@@ -6,7 +6,7 @@
 
 (define deps '("scribble-lib" "base"))
 
-(define version "0.1.0")
+(define version "0.1")
 
 (define pkg-desc "A fast math library")
 (define pkg-autors '("Peter Samarin"))
