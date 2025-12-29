@@ -35,15 +35,15 @@
                           (and (boolean? fill) fill))
                       1 0)
              n-elements _type)]
-    [(== 'int8) (_fill_int8_t data n-elements (validate-and-get-fill fill type -128 127))]
-    [(== 'uint8) (_fill_uint8_t data n-elements (validate-and-get-fill fill type 0 255))]
-    [(== 'int16) (_fill_int16_t data n-elements (validate-and-get-fill fill type -32768 32767))]
-    [(== 'uint16) (_fill_uint16_t data n-elements (validate-and-get-fill fill type 0 65535))]
-    [(== 'int32) (_fill_int32_t data n-elements (validate-and-get-fill fill type -2147483648 2147483647))]
-    [(== 'uint32) (_fill_uint32_t data n-elements (validate-and-get-fill fill type 0 4294967295))]
-    [(== 'int64) (_fill_int64_t data n-elements
-                                (validate-and-get-fill fill type -9223372036854775808 9223372036854775807))]
-    [(== 'uint64) (_fill_uint64_t data n-elements (validate-and-get-fill fill type 0 18446744073709551615))]
+    [(== 'int8) (_fill_int8 data n-elements (validate-and-get-fill fill type -128 127))]
+    [(== 'uint8) (_fill_uint8 data n-elements (validate-and-get-fill fill type 0 255))]
+    [(== 'int16) (_fill_int16 data n-elements (validate-and-get-fill fill type -32768 32767))]
+    [(== 'uint16) (_fill_uint16 data n-elements (validate-and-get-fill fill type 0 65535))]
+    [(== 'int32) (_fill_int32 data n-elements (validate-and-get-fill fill type -2147483648 2147483647))]
+    [(== 'uint32) (_fill_uint32 data n-elements (validate-and-get-fill fill type 0 4294967295))]
+    [(== 'int64) (_fill_int64 data n-elements
+                              (validate-and-get-fill fill type -9223372036854775808 9223372036854775807))]
+    [(== 'uint64) (_fill_uint64 data n-elements (validate-and-get-fill fill type 0 18446744073709551615))]
     [(== 'double) (_fill_double data n-elements (real->double-flonum (if fill fill 0.0)))]
     [(== 'cdouble) (_fill_cdouble data n-elements
                                   (real->double-flonum (if fill (real-part fill) 0.0))
@@ -120,7 +120,7 @@
     (tensor-requires-grad! A)
     (tensor-requires-grad! B))
 
-  (define len (apply * (tensor-shape A)))
+  (define len (for/product ([s (tensor-shape A)]) s))
 
   (cond [(symbol=? type-A 'double)
          (cblas_dcopy len (tensor-data B) 1 (tensor-data out) 1)
@@ -143,13 +143,51 @@
     (set-tensor-backward! out backward))
   out)
 
+
+(define+provide (tensor-mul A B)
+  (define type-A (tensor-type A))
+  (define type-B (tensor-type B))
+  ;; check supported types
+  ;; check supported types
+  (unless (symbol=? type-A type-B)
+    (error 'tensor-mul "both tensors should be of the same type, but were: ~a and ~a~n" type-A type-B))
+  (unless (or (symbol=? type-A 'double) (symbol=? type-A 'float))
+    (raise-argument-error 'tensor-mul "tensor:double or tensor:float" 0 A B))
+  (unless (or (symbol=? type-B 'double) (symbol=? type-B 'float))
+    (raise-argument-error 'tensor-mul "tensor:double or tensor:float" 1 A B))
+  (define out (make-tensor (tensor-shape A) #:type type-A #:children (list A B)))
+  (define A-grad? (not (empty? (tensor-grad A))))
+  (define B-grad? (not (empty? (tensor-grad B))))
+  (define grad? (or A-grad? B-grad?))
+
+  (when grad?
+    (tensor-requires-grad! out)
+    (tensor-requires-grad! A)
+    (tensor-requires-grad! B))
+
+  (define mul! (if (symbol=? type-A 'double) _mul_double _mul_float))
+
+  (mul! (tensor-data out) (tensor-data A) (tensor-data B) (tensor-length A))
+  
+  (define (backward)
+    (define mul-then-add! (if (symbol=? type-A 'double) _mul_then_add_double _mul_then_add_float))
+    (mul-then-add! (tensor-grad A)
+                   (tensor-data B) (tensor-grad out) (tensor-length A))
+    (mul-then-add! (tensor-grad B)
+                   (tensor-data A) (tensor-grad out) (tensor-length A)))
+
+  (when grad?
+    (set-tensor-backward! out backward))
+  out)
+
 (module+ test-tensor-add
   (define A (make-tensor (list 3 3) 1.0 #:type 'double))
   (define B (make-tensor (list 3 3) 2.0 #:type 'double))
   (tensor-requires-grad! A B)
   (define C (tensor-add A B))
-  C
-  (backward! C)
+  (define D (tensor-mul A C))
+  (backward! D)
+  D
   )
 
 (module+ another-test

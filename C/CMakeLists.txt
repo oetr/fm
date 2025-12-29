@@ -19,9 +19,21 @@ target_link_libraries(aux PRIVATE
 # Handle cross-platform PIC
 set_target_properties(aux PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# Enable SIMD instructions
 if(MSVC)
-    target_compile_options(aux PRIVATE /O2 /arch:AVX2)
+    # Windows
+    target_compile_options(aux PRIVATE
+        /O2          # Max Speed
+        /arch:AVX2   # Hardware: Enable AVX2 registers
+        /fp:fast     # Math: Allow aggressive reordering and FMA usage
+        /Oi          # Enable intrinsic functions
+    )
 else()
-    target_compile_options(aux PRIVATE -O3 -mavx2 -mfma)
+    # Linux / macOS (GCC, Clang)
+    target_compile_options(aux PRIVATE
+        -O3                  # Max Optimization
+        -mavx2               # Hardware: Enable AVX2
+        -mfma                # Hardware: Enable FMA instructions
+        -ffp-contract=fast   # Math: Force fusion of multiply-add
+        -fno-math-errno      # Math: Don't set 'errno' (allows vectorizing sqrt/pow)
+    )
 endif()

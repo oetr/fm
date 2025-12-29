@@ -1,7 +1,6 @@
 // Copyright © 2025 Peter Samarin <peter.samarin@gmail.com>
 // License: GNU AGPLv3
 
-#include <cblas.h>
 #include <math.h>
 #include <omp.h>
 #include <stdbool.h>
@@ -61,19 +60,81 @@
     }                                                                          \
   }
 
-// Fill
 GENERATE_FILL_FUNC(double, double)
 GENERATE_FILL_FUNC(float, float)
-GENERATE_FILL_FUNC(uint8_t, uint8_t)
-GENERATE_FILL_FUNC(int8_t, int8_t)
-GENERATE_FILL_FUNC(uint16_t, uint16_t)
-GENERATE_FILL_FUNC(int16_t, int16_t)
-GENERATE_FILL_FUNC(uint32_t, uint32_t)
-GENERATE_FILL_FUNC(int32_t, int32_t)
-GENERATE_FILL_FUNC(uint64_t, uint64_t)
-GENERATE_FILL_FUNC(int64_t, int64_t)
+GENERATE_FILL_FUNC(uint8, uint8_t)
+GENERATE_FILL_FUNC(int8, int8_t)
+GENERATE_FILL_FUNC(uint16, uint16_t)
+GENERATE_FILL_FUNC(int16, int16_t)
+GENERATE_FILL_FUNC(uint32, uint32_t)
+GENERATE_FILL_FUNC(int32, int32_t)
+GENERATE_FILL_FUNC(uint64, uint64_t)
+GENERATE_FILL_FUNC(int64, int64_t)
 GENERATE_CFILL_FUNC(cdouble, double)
 GENERATE_CFILL_FUNC(cfloat, float)
+
+#define GENERATE_MUL_FUNC(SUFFIX, TYPE)                                        \
+  API_EXPORT void _mul_##SUFFIX(                                               \
+      TYPE *__restrict out, const TYPE *__restrict in1,                        \
+      const TYPE *__restrict in2, const size_t len) {                          \
+    const size_t data_size = len * sizeof(TYPE);                               \
+                                                                               \
+    if (data_size >= PARALLEL_THRESHOLD_BYTES) {                               \
+      _Pragma("omp parallel for simd schedule(static)") for (size_t i = 0;     \
+                                                             i < len; i++) {   \
+        out[i] = in1[i] * in2[i];                                              \
+      }                                                                        \
+    } else {                                                                   \
+      _Pragma("omp simd") for (size_t i = 0; i < len; i++) {                   \
+        out[i] = in1[i] * in2[i];                                              \
+      }                                                                        \
+    }                                                                          \
+  }
+
+// TODO: cdouble and cfloat
+
+GENERATE_MUL_FUNC(double, double)
+GENERATE_MUL_FUNC(float, float)
+GENERATE_MUL_FUNC(uint8, uint8_t)
+GENERATE_MUL_FUNC(int8, int8_t)
+GENERATE_MUL_FUNC(uint16, uint16_t)
+GENERATE_MUL_FUNC(int16, int16_t)
+GENERATE_MUL_FUNC(uint32, uint32_t)
+GENERATE_MUL_FUNC(int32, int32_t)
+GENERATE_MUL_FUNC(uint64, uint64_t)
+GENERATE_MUL_FUNC(int64, int64_t)
+
+#define GENERATE_MUL_ADD_FUNC(SUFFIX, TYPE)                                    \
+  API_EXPORT void _mul_then_add_##SUFFIX(                                      \
+      TYPE *__restrict out, const TYPE *__restrict in1,                        \
+      const TYPE *__restrict in2, const size_t len) {                          \
+    const size_t data_size = len * sizeof(TYPE);                               \
+                                                                               \
+    if (data_size >= PARALLEL_THRESHOLD_BYTES) {                               \
+      /* 'simd' ensures the compiler uses AVX/FMA instructions inside the      \
+       * threads */                                                            \
+      _Pragma("omp parallel for simd schedule(static)") for (size_t i = 0;     \
+                                                             i < len; i++) {   \
+        out[i] += in1[i] * in2[i];                                             \
+      }                                                                        \
+    } else {                                                                   \
+      /* Force vectorization even on the serial path */                        \
+      _Pragma("omp simd") for (size_t i = 0; i < len; i++) {                   \
+        out[i] += in1[i] * in2[i];                                             \
+      }                                                                        \
+    }                                                                          \
+  }
+
+GENERATE_MUL_ADD_FUNC(double, double)
+GENERATE_MUL_ADD_FUNC(float, float)
+GENERATE_MUL_ADD_FUNC(uint8, uint8_t)
+GENERATE_MUL_ADD_FUNC(int8, int8_t)
+GENERATE_MUL_ADD_FUNC(uint16, uint16_t)
+GENERATE_MUL_ADD_FUNC(int16, int16_t)
+GENERATE_MUL_ADD_FUNC(uint32, uint32_t)
+GENERATE_MUL_ADD_FUNC(int32, int32_t)
+GENERATE_MUL_ADD_FUNC(uint64, uint64_t)
+GENERATE_MUL_ADD_FUNC(int64, int64_t)
 
 /* returns a 1D-array containing the 'len' numbers that start from 'from' and
  * stepsize 'step'
