@@ -124,6 +124,24 @@
         (incX : _int)
         -> _void))
 
+(define+provide-cblas* gemm (s d)
+  (_fun (order  : _int)
+        (TransA : _int)
+        (TransB : _int)
+        (M      : _int)
+        (N      : _int)
+        (K      : _int)
+        (alpha  : T)
+        (A      : _pointer)
+        (lda    : _int)
+        (B      : _pointer)
+        (ldb    : _int)
+        (beta   : T)
+        (C      : _pointer)
+        (ldc    : _int)
+        -> _void))
+
+
 (module+ test
   (require rackunit
            ffi/unsafe
