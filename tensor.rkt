@@ -164,10 +164,7 @@
   ;; check supported types
   (unless (symbol=? type-A type-B)
     (error 'tensor-add "both tensors should be of the same type, but were: ~a and ~a~n" type-A type-B))
-  (unless (or (symbol=? type-A 'double) (symbol=? type-A 'float))
-    (raise-argument-error 'tensor-add "tensor:double or tensor:float" 0 A B))
-  (unless (or (symbol=? type-B 'double) (symbol=? type-B 'float))
-    (raise-argument-error 'tensor-add "tensor:double or tensor:float" 1 A B))
+  
   
   (define shape-A (tensor-shape A))
   (define shape-B (tensor-shape B))
@@ -185,6 +182,10 @@
   (define grad? (or A-grad? B-grad?))
 
   (when grad?
+    (unless (or (symbol=? type-A 'double) (symbol=? type-A 'float))
+      (raise-argument-error 'tensor-add "tensor:double or tensor:float" 0 A B))
+    (unless (or (symbol=? type-B 'double) (symbol=? type-B 'float))
+      (raise-argument-error 'tensor-add "tensor:double or tensor:float" 1 A B))
     (tensor-requires-grad! out)
     (tensor-requires-grad! A)
     (tensor-requires-grad! B))
@@ -193,8 +194,8 @@
   (define ndim (length out-shape))
 
   ;; Forward Pass using generic C broadcast kernel
-  (let-typed type-A
-    ([add! _add_broadcast_double _add_broadcast_float])
+  (let-typed-c type-A
+    ([add! _add_broadcast])
     (add! ndim
           out-shape
           (tensor-data A)
@@ -244,8 +245,8 @@
                       rs rss)])))
        
        ;; 3. Call Generic C Kernel
-       (let-typed type-A
-         ([reduce! _reduce_sum_generic_double _reduce_sum_generic_float])
+       (let-typed-c type-A
+         ([reduce! _reduce_sum_generic])
          
          ;; Note: We collected in reverse order, so we reverse back to C order
          (reduce! (length keep-shape)
@@ -287,13 +288,13 @@
     (tensor-requires-grad! A)
     (tensor-requires-grad! B))
 
-  (let-typed type-A
-    ([mul! _mul_double _mul_float])
+  (let-typed-c type-A
+    ([mul! _mul])
     (mul! (tensor-data out) (tensor-data A) (tensor-data B) (tensor-length A)))
   
   (define (backward)
-    (let-typed type-A
-      ([mul-then-add! _mul_then_add_double _mul_then_add_float])
+    (let-typed-c type-A
+      ([mul-then-add! _mul_then_add])
       (mul-then-add! (tensor-grad A)
                      (tensor-data B) (tensor-grad out) (tensor-length A))
       (mul-then-add! (tensor-grad B)
