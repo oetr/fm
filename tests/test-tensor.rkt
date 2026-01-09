@@ -3,8 +3,11 @@
 (require rackunit
          ffi/unsafe
          "../tensor.rkt"
-         (only-in "../unsafe/tensor.rkt" tensor-data tensor-grad tensor? tensor-shape))
+         (only-in "../unsafe/tensor.rkt" tensor-data tensor-grad tensor? tensor-shape tensor-type))
 
+;; -----------------------------------------------------------------------------
+;; Basic Operations
+;; -----------------------------------------------------------------------------
 (test-case "tensor-tanh"
   (define A (make-tensor (list 2) 0.0 #:type 'double))
   (tensor-requires-grad! A)
@@ -68,6 +71,9 @@
   (check-= (ptr-ref data _double 3) 6.0 1e-5)
   )
 
+;; -----------------------------------------------------------------------------
+;; Gradient Accumulation & Broadcasting
+;; -----------------------------------------------------------------------------
 (test-case "gradient-accumulation-mul-self"
   ;; y = x * x
   ;; dy/dx = 2 * x
@@ -225,3 +231,125 @@
   ;; B has 6 elements (1*2*3*1)
   (for ([i (in-range 6)])
     (check-= (ptr-ref grad-B _double i) 8.0 1e-5)))
+
+;; -----------------------------------------------------------------------------
+;; Safety & Error Handling
+;; -----------------------------------------------------------------------------
+(test-case "safety-tensor-mul-mismatch"
+  (define A (make-tensor '(2 2) 1.0))
+  (define B (make-tensor '(2) 1.0))
+  (check-exn exn:fail? (lambda () (tensor-mul A B)) "Should reject shape mismatch"))
+
+(test-case "safety-tensor-matmul-rank"
+  (define A (make-tensor '(2 2 2) 1.0)) ;; 3D
+  (define B (make-tensor '(2 2) 1.0))
+  (check-exn exn:fail? (lambda () (tensor-matmul A B)) "Should reject 3D tensor"))
+
+(test-case "safety-type-mixing"
+  (define A (make-tensor '(2 2) 1.0 #:type 'double))
+  (define B (make-tensor '(2 2) 1.0 #:type 'float))
+  (check-exn exn:fail? (lambda () (tensor-add A B)) "Should reject mixed types"))
+
+;; -----------------------------------------------------------------------------
+;; Float Support
+;; -----------------------------------------------------------------------------
+(test-case "float-basic-ops"
+  (define A (make-tensor '(2) 2.0 #:type 'float))
+  (define B (make-tensor '(2) 3.0 #:type 'float))
+  (tensor-requires-grad! A B)
+  
+  ;; Mul
+  (define C (tensor-mul A B)) ;; [6.0, 6.0]
+  (check-equal? (tensor-type C) 'float)
+  (check-= (ptr-ref (tensor-data C) _float 0) 6.0 1e-4)
+  
+  (backward! C)
+  ;; dC/dA = B = 3.0
+  (check-= (ptr-ref (tensor-grad A) _float 0) 3.0 1e-4))
+
+;; -----------------------------------------------------------------------------
+;; Geometry & Edge Cases
+;; -----------------------------------------------------------------------------
+(test-case "broadcast-scalar-to-matrix"
+  (define A (make-tensor '(2 2) 1.0 #:type 'double))
+  (define s (make-tensor '(1) 5.0 #:type 'double))
+  (tensor-requires-grad! s)
+  
+  (define C (tensor-add A s)) ;; All 6.0
+  (backward! C)
+  
+  ;; dC/ds = sum(dC/dC) = sum(ones(2,2)) = 4.0
+  (check-= (ptr-ref (tensor-grad s) _double 0) 4.0 1e-5))
+
+(test-case "broadcast-sandwich-dim"
+  ;; A: (2, 1, 2)
+  ;; B: (2, 2, 2)
+  (define A (make-tensor '(2 1 2) 1.0 #:type 'double))
+  (define B (make-tensor '(2 2 2) 2.0 #:type 'double))
+  (tensor-requires-grad! A)
+  
+  (define C (tensor-add A B))
+  (backward! C)
+  
+  ;; Gradient for A should sum over the middle dimension (size 2)
+  ;; A has size 4. C has size 8.
+  ;; Each element of A broadcasts to 2 elements in C.
+  (check-= (ptr-ref (tensor-grad A) _double 0) 2.0 1e-5))
+
+(test-case "matmul-outer-product"
+  ;; (3, 1) @ (1, 3) -> (3, 3)
+  (define A (make-tensor '(3 1) 1.0 #:type 'double))
+  (define B (make-tensor '(1 3) 2.0 #:type 'double))
+  
+  (define C (tensor-matmul A B))
+  (check-equal? (tensor-shape C) '(3 3))
+  ;; Result should be all 2.0
+  (check-= (ptr-ref (tensor-data C) _double 0) 2.0 1e-5))
+
+(test-case "matmul-inner-product"
+  ;; (1, 3) @ (3, 1) -> (1, 1)
+  (define A (make-tensor '(1 3) 1.0 #:type 'double))
+  (define B (make-tensor '(3 1) 2.0 #:type 'double))
+  
+  (define C (tensor-matmul A B))
+  (check-equal? (tensor-shape C) '(1 1))
+  ;; Dot product: 1*2 + 1*2 + 1*2 = 6.0
+  (check-= (ptr-ref (tensor-data C) _double 0) 6.0 1e-5))
+
+;; -----------------------------------------------------------------------------
+;; Integration (MLP Layer)
+;; -----------------------------------------------------------------------------
+(test-case "integration-mlp-layer"
+  ;; y = tanh(Wx + b)
+  ;; W: (2, 2) = 0.5
+  ;; x: (2, 1) = 1.0
+  ;; b: (2, 1) = 0.5
+  
+  (define W (make-tensor '(2 2) 0.5 #:type 'double))
+  (define x (make-tensor '(2 1) 1.0 #:type 'double))
+  (define b (make-tensor '(2 1) 0.5 #:type 'double))
+  (tensor-requires-grad! W b)
+  
+  ;; z = Wx + b
+  ;; Wx = [[0.5, 0.5], [0.5, 0.5]] @ [[1], [1]] = [[1.0], [1.0]]
+  ;; z = [[1.0], [1.0]] + [[0.5], [0.5]] = [[1.5], [1.5]]
+  (define z (tensor-add (tensor-matmul W x) b))
+  
+  ;; a = tanh(z)
+  ;; tanh(1.5) ~= 0.905148
+  (define a (tensor-tanh z))
+  
+  (check-= (ptr-ref (tensor-data a) _double 0) 0.905148 1e-5)
+  (check-= (ptr-ref (tensor-data a) _double 1) 0.905148 1e-5)
+  
+  (backward! a)
+  
+  ;; Gradient check
+  ;; da/dz = 1 - tanh^2(z) = 1 - 0.905148^2 ~= 1 - 0.81929 = 0.18071
+  ;; da/db = da/dz * dz/db = da/dz * 1
+  (check-= (ptr-ref (tensor-grad b) _double 0) 0.18071 1e-4)
+  
+  ;; da/dW = da/dz * dz/dW = da/dz * x^T
+  ;; dz/dW is outer product of da/dz vector and x vector
+  ;; 0.18071 * 1.0 = 0.18071
+  (check-= (ptr-ref (tensor-grad W) _double 0) 0.18071 1e-4))

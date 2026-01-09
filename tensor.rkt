@@ -272,6 +272,8 @@
   ;; check supported types
   (unless (symbol=? type-A type-B)
     (error 'tensor-mul "both tensors should be of the same type, but were: ~a and ~a~n" type-A type-B))
+  (unless (equal? (tensor-shape A) (tensor-shape B))
+    (error 'tensor-mul "tensors must have the same shape, got: ~a and ~a" (tensor-shape A) (tensor-shape B)))
   (unless (or (symbol=? type-A 'double) (symbol=? type-A 'float))
     (raise-argument-error 'tensor-mul "tensor:double or tensor:float" 0 A B))
   (unless (or (symbol=? type-B 'double) (symbol=? type-B 'float))
