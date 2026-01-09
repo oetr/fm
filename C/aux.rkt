@@ -117,11 +117,11 @@
 
 (define+provide-aux* _add_broadcast *all-types-without-complex*
   (_fun (ndim      : _ulong)
-        (shape     : _int64)
+        (shape     : (_list i _uint64))
         (A-data    : _gcpointer)
-        (A-strides : _gcpointer)
+        (A-strides : (_list i _uint64))
         (B-data    : _gcpointer)
-        (B-strides : _gcpointer)
+        (B-strides : (_list i _uint64))
         (out-data  : _gcpointer)
         -> _void))
 

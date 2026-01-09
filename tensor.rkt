@@ -145,19 +145,17 @@
   
   (values out-shape new-stA new-stB))
 
-
-(define (compatible-shapes? shape-A shape-B)
-  (equal? shape-A shape-B))
-
 (define (broadcast-compatible? shape-A shape-B)
   ;; Simplified broadcasting:
   ;; 1. If shapes are equal -> compatible
   ;; 2. If rank(A) == 2 and rank(B) == 1 and B dim matches last dim of A -> compatible (add vector to rows)
   ;; This handles the bias addition case (Matrix + Vector)
   (or (equal? shape-A shape-B)
-      (and (= (length shape-A) 2)
-           (= (length shape-B) 1)
-           (= (second shape-A) (first shape-B)))))
+      (with-handlers ([exn:fail? (lambda (_) #f)])
+        ;; Try to calculate broadcast structs; if it fails, they are incompatible
+        (broadcast-structs shape-A (make-list (length shape-A) 1)
+                           shape-B (make-list (length shape-B) 1))
+        #t)))
 
 (define+provide (tensor-add A B)
   (define type-A (tensor-type A))
@@ -171,13 +169,17 @@
   (unless (or (symbol=? type-B 'double) (symbol=? type-B 'float))
     (raise-argument-error 'tensor-add "tensor:double or tensor:float" 1 A B))
   
-  ;; check dimensions
-  (unless (broadcast-compatible? (tensor-shape A) (tensor-shape B))
-    (error  'tensor-add "tensor shapes incompatible: ~a vs ~a" (tensor-shape A) (tensor-shape B)))
+  (define shape-A (tensor-shape A))
+  (define shape-B (tensor-shape B))
+  (define strides-A (tensor-strides A))
+  (define strides-B (tensor-strides B))
+
+  ;; Calculate broadcast shapes and strides
+  (define-values (out-shape broadcast-strides-A broadcast-strides-B)
+    (broadcast-structs shape-A strides-A shape-B strides-B))
   
-  (define broadcast? (not (equal? (tensor-shape A) (tensor-shape B))))
+  (define out (make-tensor out-shape #:type type-A #:children (list A B)))
   
-  (define out (make-tensor (tensor-shape A) #:type type-A #:children (list A B)))
   (define A-grad? (not (empty? (tensor-grad A))))
   (define B-grad? (not (empty? (tensor-grad B))))
   (define grad? (or A-grad? B-grad?))
@@ -187,59 +189,48 @@
     (tensor-requires-grad! A)
     (tensor-requires-grad! B))
 
-  (define len (tensor-length A))
+  ;; Prepare arguments for C function
+  (define ndim (length out-shape))
 
-  ;; Forward Pass
-  (cond
-    [(not broadcast?)
-     ;; Standard element-wise add
-     (let-typed type-A
-       ([copy cblas_dcopy cblas_scopy]
-        [axpy cblas_daxpy cblas_saxpy])
-       (copy len (tensor-data B) 1 (tensor-data out) 1)
-       (axpy len 1.0 (tensor-data A) 1 (tensor-data out) 1))]
-    [else
-     ;; Broadcasting: A is (M, N), B is (N)
-     ;; We add B to every row of A
-     (match-define (list M N) (tensor-shape A))
-     ;; First copy A to Out
-     (let-typed type-A
-       ([copy cblas_dcopy cblas_scopy])
-       (copy len (tensor-data A) 1 (tensor-data out) 1))
-     
-     ;; Now add B to every row of Out
-     ;; We can do this by looping M times and axpy-ing B into the row pointer
-     (define type-size (if (symbol=? type-A 'double) 8 4))
-     (let-typed type-A
-       ([axpy cblas_daxpy cblas_saxpy])
-       (for ([i (in-range M)])
-         (define offset (* i N type-size))
-         (axpy N 1.0 (tensor-data B) 1 (ptr-add (tensor-data out) offset) 1)))])
+  ;; Forward Pass using generic C broadcast kernel
+  (let-typed type-A
+    ([add! _add_broadcast_double _add_broadcast_float])
+    (add! ndim
+          out-shape
+          (tensor-data A)
+          broadcast-strides-A
+          (tensor-data B)
+          broadcast-strides-B
+          (tensor-data out)))
 
-  (define backward
-    (cond [(not broadcast?)
-           (let-typed type-A
-             ([axpy cblas_daxpy cblas_saxpy])
-             (lambda ()
-               (axpy len 1.0 (tensor-grad out) 1 (tensor-grad A) 1)
-               (axpy len 1.0 (tensor-grad out) 1 (tensor-grad B) 1)))]
-          [else
-           ;; Backward for Broadcast
-           ;; dOut -> dA is Identity (since Out = A + broadcast(B))
-           ;; dOut -> dB is sum over rows (since B was added to every row)
-           (match-define (list M N) (tensor-shape A))
-           (lambda ()
-             ;; dA += dOut
-             (let-typed type-A
-               ([axpy cblas_daxpy cblas_saxpy])
-               (axpy len 1.0 (tensor-grad out) 1 (tensor-grad A) 1)
-               
-               ;; dB += sum_rows(dOut)
-               ;; We can loop and accumulate dOut rows into dB
-               (define type-size (if (symbol=? type-A 'double) 8 4))
-               (for ([i (in-range M)])
-                 (define offset (* i N type-size))
-                 (axpy N 1.0 (ptr-add (tensor-grad out) offset) 1 (tensor-grad B) 1))))]))
+  (define (backward)
+    (cond
+      [(equal? shape-A shape-B)
+       (let-typed type-A
+         ([axpy cblas_daxpy cblas_saxpy])
+         (axpy (tensor-length out) 1.0 (tensor-grad out) 1 (tensor-grad A) 1)
+         (axpy (tensor-length out) 1.0 (tensor-grad out) 1 (tensor-grad B) 1))]
+      
+      ;; Special case: Bias add (M, N) + (N)
+      [(and (= (length shape-A) 2)
+            (= (length shape-B) 1)
+            (= (second shape-A) (first shape-B)))
+       (let-typed type-A
+         ([axpy cblas_daxpy cblas_saxpy])
+         ;; dA += dOut (Direct copy/add since shape matches)
+         (axpy (tensor-length out) 1.0 (tensor-grad out) 1 (tensor-grad A) 1)
+         
+         ;; dB += sum_rows(dOut)
+         (define M (first shape-A))
+         (define N (second shape-A))
+         (define type-size (if (symbol=? type-A 'double) 8 4))
+         
+         (for ([i (in-range M)])
+           (define offset (* i N type-size))
+           (axpy N 1.0 (ptr-add (tensor-grad out) offset) 1 (tensor-grad B) 1)))]
+      
+      [else
+       (error 'tensor-add:backward "Generic backward broadcasting not yet implemented (requires reduction kernel)")]))
 
   (when grad?
     (set-tensor-backward! out backward))
