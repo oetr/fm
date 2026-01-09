@@ -144,39 +144,36 @@
   (cond 
     [(not broadcast?)
      ;; Standard element-wise add
-     (cond [(symbol=? type-A 'double)
-            (cblas_dcopy len (tensor-data B) 1 (tensor-data out) 1)
-            (cblas_daxpy len 1.0 (tensor-data A) 1 (tensor-data out) 1)]
-           [else
-            (cblas_scopy len (tensor-data B) 1 (tensor-data out) 1)
-            (cblas_saxpy len 1.0 (tensor-data A) 1 (tensor-data out) 1)])]
+     (let-typed type-A
+       ([copy cblas_dcopy cblas_scopy]
+        [axpy cblas_daxpy cblas_saxpy])
+       (copy len (tensor-data B) 1 (tensor-data out) 1)
+       (axpy len 1.0 (tensor-data A) 1 (tensor-data out) 1))]
     [else
      ;; Broadcasting: A is (M, N), B is (N)
      ;; We add B to every row of A
      (match-define (list M N) (tensor-shape A))
      ;; First copy A to Out
-     (if (symbol=? type-A 'double)
-         (cblas_dcopy len (tensor-data A) 1 (tensor-data out) 1)
-         (cblas_scopy len (tensor-data A) 1 (tensor-data out) 1))
+     (let-typed type-A
+       ([copy cblas_dcopy cblas_scopy])
+       (copy len (tensor-data A) 1 (tensor-data out) 1))
      
      ;; Now add B to every row of Out
      ;; We can do this by looping M times and axpy-ing B into the row pointer
      (define type-size (if (symbol=? type-A 'double) 8 4))
-     (define axpy (if (symbol=? type-A 'double) cblas_daxpy cblas_saxpy))
-     (for ([i (in-range M)])
-       (define offset (* i N type-size))
-       (axpy N 1.0 (tensor-data B) 1 (ptr-add (tensor-data out) offset) 1))])
+     (let-typed type-A
+       ([axpy cblas_daxpy cblas_saxpy])
+       (for ([i (in-range M)])
+         (define offset (* i N type-size))
+         (axpy N 1.0 (tensor-data B) 1 (ptr-add (tensor-data out) offset) 1)))])
 
   (define backward    
     (cond [(not broadcast?)
-           (cond [(symbol=? type-A 'double)
-                  (lambda ()
-                    (cblas_daxpy len 1.0 (tensor-grad out) 1 (tensor-grad A) 1)
-                    (cblas_daxpy len 1.0 (tensor-grad out) 1 (tensor-grad B) 1))]
-                 [else
-                  (lambda ()
-                    (cblas_saxpy len 1.0 (tensor-grad out) 1 (tensor-grad A) 1)
-                    (cblas_saxpy len 1.0 (tensor-grad out) 1 (tensor-grad B) 1))])]
+           (let-typed type-A
+             ([axpy cblas_daxpy cblas_saxpy])
+             (lambda ()
+               (axpy len 1.0 (tensor-grad out) 1 (tensor-grad A) 1)
+               (axpy len 1.0 (tensor-grad out) 1 (tensor-grad B) 1)))]
           [else
            ;; Backward for Broadcast
            ;; dOut -> dA is Identity (since Out = A + broadcast(B))
@@ -184,17 +181,16 @@
            (match-define (list M N) (tensor-shape A))
            (lambda ()
              ;; dA += dOut
-             (if (symbol=? type-A 'double)
-                 (cblas_daxpy len 1.0 (tensor-grad out) 1 (tensor-grad A) 1)
-                 (cblas_saxpy len 1.0 (tensor-grad out) 1 (tensor-grad A) 1))
-             
-             ;; dB += sum_rows(dOut)
-             ;; We can loop and accumulate dOut rows into dB
-             (define type-size (if (symbol=? type-A 'double) 8 4))
-             (define axpy (if (symbol=? type-A 'double) cblas_daxpy cblas_saxpy))
-             (for ([i (in-range M)])
-               (define offset (* i N type-size))
-               (axpy N 1.0 (ptr-add (tensor-grad out) offset) 1 (tensor-grad B) 1)))]))
+             (let-typed type-A
+               ([axpy cblas_daxpy cblas_saxpy])
+               (axpy len 1.0 (tensor-grad out) 1 (tensor-grad A) 1)
+               
+               ;; dB += sum_rows(dOut)
+               ;; We can loop and accumulate dOut rows into dB
+               (define type-size (if (symbol=? type-A 'double) 8 4))
+               (for ([i (in-range M)])
+                 (define offset (* i N type-size))
+                 (axpy N 1.0 (ptr-add (tensor-grad out) offset) 1 (tensor-grad B) 1))))]))
 
   (when grad?
     (set-tensor-backward! out backward))
@@ -221,16 +217,17 @@
     (tensor-requires-grad! A)
     (tensor-requires-grad! B))
 
-  (define mul! (if (symbol=? type-A 'double) _mul_double _mul_float))
-
-  (mul! (tensor-data out) (tensor-data A) (tensor-data B) (tensor-length A))
+  (let-typed type-A
+    ([mul! _mul_double _mul_float])
+    (mul! (tensor-data out) (tensor-data A) (tensor-data B) (tensor-length A)))
   
   (define (backward)
-    (define mul-then-add! (if (symbol=? type-A 'double) _mul_then_add_double _mul_then_add_float))
-    (mul-then-add! (tensor-grad A)
-                   (tensor-data B) (tensor-grad out) (tensor-length A))
-    (mul-then-add! (tensor-grad B)
-                   (tensor-data A) (tensor-grad out) (tensor-length A)))
+    (let-typed type-A
+      ([mul-then-add! _mul_then_add_double _mul_then_add_float])
+      (mul-then-add! (tensor-grad A)
+                     (tensor-data B) (tensor-grad out) (tensor-length A))
+      (mul-then-add! (tensor-grad B)
+                     (tensor-data A) (tensor-grad out) (tensor-length A))))
 
   (when grad?
     (set-tensor-backward! out backward))
@@ -266,19 +263,20 @@
     (tensor-requires-grad! A)
     (tensor-requires-grad! B))
 
-  (define cblas-gemm (if (symbol=? type-A 'double) cblas_dgemm cblas_sgemm))
-  
-  ;; C = alpha*A*B + beta*C
-  ;; We want C = 1*A*B + 0*C
-  ;; RowMajor = 101, NoTrans = 111
-  (cblas-gemm 101 111 111 M N K 1.0 (tensor-data A) K (tensor-data B) N 0.0 (tensor-data out) N)
+  (let-typed type-A
+    ([gemm cblas_dgemm cblas_sgemm])
+    ;; C = alpha*A*B + beta*C
+    ;; We want C = 1*A*B + 0*C
+    ;; RowMajor = 101, NoTrans = 111
+    (gemm 101 111 111 M N K 1.0 (tensor-data A) K (tensor-data B) N 0.0 (tensor-data out) N))
 
   (define (backward)
-    (define cblas-gemm (if (symbol=? type-A 'double) cblas_dgemm cblas_sgemm))
-    ;; dA += dC * B^T
-    (cblas-gemm 101 111 112 M K N 1.0 (tensor-grad out) N (tensor-data B) N 1.0 (tensor-grad A) K)
-    ;; dB += A^T * dC
-    (cblas-gemm 101 112 111 K N M 1.0 (tensor-data A) K (tensor-grad out) N 1.0 (tensor-grad B) N))
+    (let-typed type-A
+      ([gemm cblas_dgemm cblas_sgemm])
+      ;; dA += dC * B^T
+      (gemm 101 111 112 M K N 1.0 (tensor-grad out) N (tensor-data B) N 1.0 (tensor-grad A) K)
+      ;; dB += A^T * dC
+      (gemm 101 112 111 K N M 1.0 (tensor-data A) K (tensor-grad out) N 1.0 (tensor-grad B) N)))
 
   (when grad?
     (set-tensor-backward! out backward))
@@ -294,8 +292,9 @@
   (when (not (empty? (tensor-grad T)))
     (tensor-requires-grad! out))
 
-  (define tanh! (if (symbol=? type 'double) _tanh_double _tanh_float))
-  (tanh! (tensor-data out) (tensor-data T) (tensor-length T))
+  (let-typed type
+    ([tanh! _tanh_double _tanh_float])
+    (tanh! (tensor-data out) (tensor-data T) (tensor-length T)))
 
   ;; d/dx tanh(x) = 1 - tanh(x)^2 = 1 - out^2
   (define (backward)

@@ -20,3 +20,13 @@
      (begin
        (provide name)
        (define name body))]))
+
+(provide let-typed)
+(define-syntax (let-typed stx)
+  (syntax-case stx ()
+    [(_ type ([id double-val float-val] ...) body ...)
+     #'(if (symbol=? type 'double)
+           (let ([id double-val] ...)
+             body ...)
+           (let ([id float-val] ...)
+             body ...))]))
