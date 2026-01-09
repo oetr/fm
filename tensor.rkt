@@ -8,6 +8,8 @@
          "./private/utilities.rkt"
          "./C/aux.rkt")
 
+(module+ test (require rackunit))
+
 (define+provide (tensor-length A) (for/product ([dim-len (tensor-shape A)]) dim-len))
 
 (define+provide (tensor-rank A) (length (tensor-shape A)))
@@ -345,9 +347,101 @@
     (set-tensor-backward! out backward))
   out)
 
-(module+ test
-  (require rackunit)
 
+(module+ test
+  ;; Helper to make tests concise
+  (define (check-broadcast shape-A strides-A shape-B strides-B expected-shape expected-strides-A expected-strides-B)
+    (define-values (out sA sB) (broadcast-structs shape-A strides-A shape-B strides-B))
+    (check-equal? out expected-shape "Output shape mismatch")
+    (check-equal? sA expected-strides-A "Strides A mismatch")
+    (check-equal? sB expected-strides-B "Strides B mismatch"))
+
+  ;; 1. Identity Broadcast (Same Shape)
+  ;; A: (2, 3), B: (2, 3) -> Out: (2, 3)
+  ;; Strides should remain unchanged.
+  (test-case "Identity: (2,3) + (2,3)"
+    (check-broadcast '(2 3) '(3 1)
+                     '(2 3) '(3 1)
+                     '(2 3) '(3 1) '(3 1)))
+
+  ;; 2. Standard Matrix + Vector (Bias Add)
+  ;; A: (2, 3), B: (3) -> Out: (2, 3)
+  ;; B is implicitly padded to (1, 3) with stride (0, 1).
+  ;; Then dim 0 of B (1) is broadcast to (2), so stride becomes 0.
+  (test-case "Bias Add: (2,3) + (3)"
+    (check-broadcast '(2 3) '(3 1)
+                     '(3)   '(1)
+                     '(2 3) '(3 1) '(0 1)))
+
+  ;; 3. Column Vector Broadcast
+  ;; A: (2, 3), B: (2, 1) -> Out: (2, 3)
+  ;; B matches rows (2), but has 1 column.
+  ;; B's column stride (stride-B[1]) becomes 0.
+  (test-case "Column Broadcast: (2,3) + (2,1)"
+    (check-broadcast '(2 3) '(3 1)
+                     '(2 1) '(1 1)
+                     '(2 3) '(3 1) '(1 0)))
+
+  ;; 4. Scalar Broadcast
+  ;; A: (2, 2), B: () -> Out: (2, 2)
+  ;; B is padded to (1, 1). Both dims are broadcast, so strides become (0, 0).
+  (test-case "Scalar: (2,2) + ()"
+    (check-broadcast '(2 2) '(2 1)
+                     '()    '()
+                     '(2 2) '(2 1) '(0 0)))
+
+  ;; 5. Outer Product (Interleaved Dimensions)
+  ;; A: (3, 1), B: (1, 4) -> Out: (3, 4)
+  ;; A broadcasts col (stride 0), B broadcasts row (stride 0).
+  (test-case "Outer Product: (3,1) + (1,4)"
+    (check-broadcast '(3 1) '(1 1)
+                     '(1 4) '(4 1)
+                     '(3 4) '(1 0) '(0 1)))
+
+  ;; 6. Leading Dimensions (3D + 2D)
+  ;; A: (2, 3, 4), B: (3, 4) -> Out: (2, 3, 4)
+  ;; B padded to (1, 3, 4). B dim 0 broadcasts to 2 (stride 0).
+  (test-case "Rank mismatch: (2,3,4) + (3,4)"
+    (check-broadcast '(2 3 4) '(12 4 1)
+                     '(3 4)   '(4 1)
+                     '(2 3 4) '(12 4 1) '(0 4 1)))
+
+  ;; 7. Complex Interleaved 3D
+  ;; A: (1, 2, 1), B: (5, 1, 3) -> Out: (5, 2, 3)
+  ;; A broadcasts dims 0 and 2 (strides -> 0).
+  ;; B broadcasts dim 1 (stride -> 0).
+  (test-case "Interleaved 3D: (1,2,1) + (5,1,3)"
+    (check-broadcast '(1 2 1) '(2 1 1)
+                     '(5 1 3) '(3 3 1)
+                     '(5 2 3) '(0 1 0) '(3 0 1)))
+
+  ;; 8. Single Dimension Broadcast
+  ;; A: (1), B: (5) -> Out: (5)
+  ;; A broadcasts to match B.
+  (test-case "1D Broadcast: (1) + (5)"
+    (check-broadcast '(1) '(1)
+                     '(5) '(1)
+                     '(5) '(0) '(1)))
+
+  ;; 9. Error: Dimension Mismatch (Non-Singleton)
+  ;; (2, 3) vs (2, 4). 3 != 4 and neither is 1.
+  (test-case "Error: Mismatch (2,3) vs (2,4)"
+    (check-exn exn:fail?
+               (lambda ()
+                 (broadcast-structs '(2 3) '(3 1)
+                                    '(2 4) '(4 1)))))
+
+  ;; 10. Error: Incompatible Leading Dimensions
+  ;; (2) vs (3). Padded, this is (2) vs (3).
+  ;; Unlike (2,3) vs (3) where alignment happens on the right,
+  ;; direct 1D mismatch 2 vs 3 is fatal.
+  (test-case "Error: Mismatch (2) vs (3)"
+    (check-exn exn:fail?
+               (lambda ()
+                 (broadcast-structs '(2) '(1)
+                                    '(3) '(1)))))
+  )
+(module+ test
   (test-case "tensor-tanh"
     (define A (make-tensor (list 2) 0.0 #:type 'double))
     (tensor-requires-grad! A)
