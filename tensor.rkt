@@ -249,7 +249,7 @@
 
   ;; For now, assume 2D matrices
   (when (or (not (= (tensor-rank A) 2)) (not (= (tensor-rank B) 2)))
-     (error 'tensor-matmul "only 2D matrices supported currently"))
+    (error 'tensor-matmul "only 2D matrices supported currently"))
 
   (match-define (list M K) (tensor-shape A))
   (match-define (list K2 N) (tensor-shape B))
@@ -320,22 +320,22 @@
     (define val-out (tensor-data out))
     
     (define (bwd-cpu-double)
-       (for ([i (in-range len)])
-         (define y (ptr-ref val-out _double i))
-         (define dy (ptr-ref g-out _double i))
-         (define dx (* dy (- 1.0 (* y y))))
-         (define cur-dx (ptr-ref g-in _double i))
-         (ptr-set! g-in _double i (+ cur-dx dx))))
+      (for ([i (in-range len)])
+        (define y (ptr-ref val-out _double i))
+        (define dy (ptr-ref g-out _double i))
+        (define dx (* dy (- 1.0 (* y y))))
+        (define cur-dx (ptr-ref g-in _double i))
+        (ptr-set! g-in _double i (+ cur-dx dx))))
 
-     (define (bwd-cpu-float)
-       (for ([i (in-range len)])
-         (define y (ptr-ref val-out _float i))
-         (define dy (ptr-ref g-out _float i))
-         (define dx (* dy (- 1.0 (* y y))))
-         (define cur-dx (ptr-ref g-in _float i))
-         (ptr-set! g-in _float i (+ cur-dx dx))))
+    (define (bwd-cpu-float)
+      (for ([i (in-range len)])
+        (define y (ptr-ref val-out _float i))
+        (define dy (ptr-ref g-out _float i))
+        (define dx (* dy (- 1.0 (* y y))))
+        (define cur-dx (ptr-ref g-in _float i))
+        (ptr-set! g-in _float i (+ cur-dx dx))))
 
-     (if (symbol=? type 'double) (bwd-cpu-double) (bwd-cpu-float)))
+    (if (symbol=? type 'double) (bwd-cpu-double) (bwd-cpu-float)))
 
   (when (not (empty? (tensor-grad T)))
     (set-tensor-backward! out backward))
@@ -392,11 +392,11 @@
   (test-case "tensor-matmul"
     (define A (make-tensor '(2 3) 1.0 #:type 'double)) ;; 2x3 matrix of 1s
     (define B (make-tensor '(3 2) 2.0 #:type 'double)) ;; 3x2 matrix of 2s
-  
+    
     ;; C = A * B -> (2x3) * (3x2) -> (2x2)
     ;; each element C_ij = sum(A_ik * B_kj) = sum(1.0 * 2.0) for k=0..2 = 2.0 * 3 = 6.0
     (define C (tensor-matmul A B))
-  
+    
     (check-equal? (tensor-shape C) '(2 2))
     
     ;; Check values
@@ -405,7 +405,7 @@
     (check-= (ptr-ref data _double 1) 6.0 1e-5)
     (check-= (ptr-ref data _double 2) 6.0 1e-5)
     (check-= (ptr-ref data _double 3) 6.0 1e-5)
-  ))
+    ))
 
 
 (module+ another-test
