@@ -88,7 +88,6 @@
         (len   :  _ulong)
         -> _void))
 
-;; --- Activation functions ---
 (define+provide-aux* _tanh (_double _float)
   (_fun (out : _gcpointer)
         (in  : _gcpointer)
@@ -133,7 +132,6 @@
         (out-data   : _gcpointer)
         -> _void))
 
-
 (define+provide-aux* _reduce_sum_generic (_double _float)
   (_fun
    (n-keep             : _size)
@@ -153,6 +151,3 @@
         (grad-in  : _gcpointer)
         (len      : _size)
         -> _void))
-
-
-
