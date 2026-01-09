@@ -19,43 +19,48 @@
   (define _type (symbol->type type))
 
   ;; alloc
-  (define n-elements (apply * shape))
+  (define n-elements (for/product ([s shape]) s))
   (when (or (symbol=? type 'cfloat)
             (symbol=? type 'cdouble))
     (set! n-elements (* n-elements 2)))
 
   (define data (alloc-tensor n-elements #:type _type))
-
-  ;; fill
-  (match type
-    [(== 'bool)
-     (unless (or (number? fill) (boolean? fill))
-       (error 'make-tensor "Expected a boolean or a number for for the fill value, but got ~a~n" fill))
-     (memset data (if (or (and (number? fill) (not (zero? fill)))
-                          (and (boolean? fill) fill))
-                      1 0)
-             n-elements _type)]
-    [(== 'int8) (_fill_int8 data n-elements (validate-and-get-fill fill type -128 127))]
-    [(== 'uint8) (_fill_uint8 data n-elements (validate-and-get-fill fill type 0 255))]
-    [(== 'int16) (_fill_int16 data n-elements (validate-and-get-fill fill type -32768 32767))]
-    [(== 'uint16) (_fill_uint16 data n-elements (validate-and-get-fill fill type 0 65535))]
-    [(== 'int32) (_fill_int32 data n-elements (validate-and-get-fill fill type -2147483648 2147483647))]
-    [(== 'uint32) (_fill_uint32 data n-elements (validate-and-get-fill fill type 0 4294967295))]
-    [(== 'int64) (_fill_int64 data n-elements
-                              (validate-and-get-fill fill type -9223372036854775808 9223372036854775807))]
-    [(== 'uint64) (_fill_uint64 data n-elements (validate-and-get-fill fill type 0 18446744073709551615))]
-    [(== 'double) (_fill_double data n-elements (real->double-flonum (if fill fill 0.0)))]
-    [(== 'cdouble) (_fill_cdouble data n-elements
-                                  (real->double-flonum (if fill (real-part fill) 0.0))
-                                  (real->double-flonum (if fill (imag-part fill) 0.0)))]
-    [(== 'float) (_fill_float data n-elements (real->double-flonum (if fill fill 0.0)))]
-    [(== 'cfloat) (_fill_cfloat data n-elements
-                                (real->double-flonum (if fill (real-part fill) 0.0))
-                                (real->double-flonum (if fill (imag-part fill) 0.0)))]
-    [_ (error 'make-tensor "unsupported type: ~a~n" type)])
+  (tensor-fill-data! data type n-elements fill)
 
   (define strides (shape->strides shape))
   (tensor shape strides type data empty void children))
+
+
+(define (tensor-fill-data! data type n-elements fill)
+  (match type
+    [(== 'bool)
+     (unless (or (number? fill) (boolean? fill))
+       (error 'make-tensor "Expected a boolean or a number for the fill value, but got ~a~n" fill))
+     ;; Logic: If number != 0 -> true; If boolean true -> true; else 0
+     (define byte-val (if (or (and (number? fill) (not (zero? fill)))
+                              (and (boolean? fill) fill))
+                          1 0))
+     (memset data byte-val n-elements (symbol->type type))]
+    [(== 'int8)   (_fill_int8 data n-elements (validate-and-get-fill fill type -128 127))]
+    [(== 'uint8)  (_fill_uint8 data n-elements (validate-and-get-fill fill type 0 255))]
+    [(== 'int16)  (_fill_int16 data n-elements (validate-and-get-fill fill type -32768 32767))]
+    [(== 'uint16) (_fill_uint16 data n-elements (validate-and-get-fill fill type 0 65535))]
+    [(== 'int32)  (_fill_int32 data n-elements (validate-and-get-fill fill type -2147483648 2147483647))]
+    [(== 'uint32) (_fill_uint32 data n-elements (validate-and-get-fill fill type 0 4294967295))]
+    [(== 'int64)  (_fill_int64 data n-elements
+                               (validate-and-get-fill fill type -9223372036854775808 9223372036854775807))]
+    [(== 'uint64) (_fill_uint64 data n-elements (validate-and-get-fill fill type 0 18446744073709551615))]
+    [(== 'double) (_fill_double data n-elements (real->double-flonum (if fill fill 0.0)))]
+    [(== 'float)  (_fill_float data n-elements (real->double-flonum (if fill fill 0.0)))]
+    [(== 'cdouble)
+     (_fill_cdouble data n-elements
+                    (real->double-flonum (if fill (real-part fill) 0.0))
+                    (real->double-flonum (if fill (imag-part fill) 0.0)))]
+    [(== 'cfloat)
+     (_fill_cfloat data n-elements
+                   (real->double-flonum (if fill (real-part fill) 0.0))
+                   (real->double-flonum (if fill (imag-part fill) 0.0)))]
+    [_ (error 'make-tensor "unsupported type: ~a~n" type)]))
 
 (define+provide (tensor-zeros shape #:type (type 'double))
   (make-tensor shape 0 #:type type))
