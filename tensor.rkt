@@ -204,61 +204,63 @@
           (tensor-data out)))
 
   (define (backward)
-    ;; For backward pass, we need to accumulate gradients.
-    ;; Since A and B might be broadcasted, we essentially need to "un-broadcast" (sum) the gradients 
-    ;; if the dimension was broadcasted.
-    ;; However, our current C kernel infrastructure is for forward broadcasting.
-    ;; To do this efficiently, we can use the same broadcasting kernel structure but we need
-    ;; to map dOut -> dA and dOut -> dB.
-    ;;
-    ;; dOut has shape 'out-shape' and strides 'out-strides' (contiguous).
-    ;; dA should accumulate dOut. If A was broadcasted, multiple dOut elements map to one A element.
-    ;;
-    ;; Current limitation: The generic _add_broadcast kernel writes to a contiguous output.
-    ;; It does NOT support accumulating into a strided output (which would be needed for dA += ...).
-    ;;
-    ;; TEMPORARY SOLUTION:
-    ;; We fall back to the simple logic for the common non-broadcast case,
-    ;; and the specialized row-broadcast case implemented previously,
-    ;; but ideally we need a `_reduce_sum` kernel to support full backward broadcasting.
-    ;;
-    ;; Since the user asked to UNIFY the logic, we should probably stick to the generic kernel
-    ;; for the forward pass (done above).
-    ;; For the backward pass, fully generic un-broadcasting requires a reduction kernel which we don't have yet.
-    ;;
-    ;; Strategy:
-    ;; 1. If shapes match (no broadcast), use simple axpy.
-    ;; 2. If row-broadcast (M,N) + (N), use the manual loop (existing logic).
-    ;; 3. Otherwise, error for now on backward (until reduction kernel is added).
+    ;; Helper to accumulate gradients properly when broadcasting occurs.
+    ;; If shape(out) == shape(input), direct axpy.
+    ;; If broadcast occurred, we need to reduce sum over the broadcasted dimensions.
+    (define (accumulate-grad! input-tensor grad-out)
+    (define in-shape (tensor-shape input-tensor))
+    (define out-shape (tensor-shape out))
     
     (cond
-      [(equal? shape-A shape-B)
+      ;; Optimization: Simple 1:1 match
+      [(equal? in-shape out-shape)
        (let-typed type-A
          ([axpy cblas_daxpy cblas_saxpy])
-         (axpy (tensor-length out) 1.0 (tensor-grad out) 1 (tensor-grad A) 1)
-         (axpy (tensor-length out) 1.0 (tensor-grad out) 1 (tensor-grad B) 1))]
-      
-      ;; Special case: Bias add (M, N) + (N)
-      ;; We use the specialized reduction kernel _reduce_sum_axis0
-      ;; M = outer-dim, N = inner-dim
-      [(and (= (length shape-A) 2)
-            (= (length shape-B) 1)
-            (= (second shape-A) (first shape-B)))
-       (let-typed type-A
-         ([axpy cblas_daxpy cblas_saxpy])
-         ;; dA += dOut (Direct copy/add since shape matches)
-         (axpy (tensor-length out) 1.0 (tensor-grad out) 1 (tensor-grad A) 1))
-         
-         ;; dB += sum_rows(dOut)
-         ;; (M, N) -> (N) reduction along axis 0
-         (define M (first shape-A))
-         (define N (second shape-A))
-         (let-typed type-A
-           ([reduce! _reduce_sum_axis0_double _reduce_sum_axis0_float])
-           (reduce! M N (tensor-grad out) (tensor-grad B)))]
-      
+         (axpy (tensor-length out) 1.0 grad-out 1 (tensor-grad input-tensor) 1))]
+
       [else
-       (error 'tensor-add:backward "Generic backward broadcasting not yet implemented (requires generic reduction kernel)")]))
+       ;; 1. Pad input shape to match output rank
+       (define rank-out (length out-shape))
+       (define pad-len  (- rank-out (length in-shape)))
+       (define padded-in-shape (append (make-list pad-len 1) in-shape))
+       
+       ;; 2. Categorize Dimensions into KEEP vs REDUCE
+       (define-values (keep-shape keep-src-st keep-dst-st
+                       reduce-shape reduce-src-st)
+         (for/fold ([ks '()] [kss '()] [kds '()]
+                    [rs '()] [rss '()])
+                   ([d-in  (in-list padded-in-shape)]
+                    [d-out (in-list out-shape)]
+                    [st-out (in-list (tensor-strides out))]
+                    [st-in  (in-list (append (make-list pad-len 0) (tensor-strides input-tensor)))])
+           (cond
+             ;; If input dim is 1 and output > 1, this is a REDUCTION axis
+             [(and (= d-in 1) (> d-out 1))
+              (values ks kss kds
+                      (cons d-out rs) (cons st-out rss))]
+             ;; Otherwise, it is a PARALLEL (Keep) axis
+             [else
+              (values (cons d-out ks) (cons st-out kss) (cons st-in kds)
+                      rs rss)])))
+       
+       ;; 3. Call Generic C Kernel
+       (let-typed type-A
+         ([reduce! _reduce_sum_generic_double _reduce_sum_generic_float])
+         
+         ;; Note: We collected in reverse order, so we reverse back to C order
+         (reduce! (length keep-shape)
+                  (reverse keep-shape)
+                  (reverse keep-src-st)
+                  (reverse keep-dst-st)
+                  (length reduce-shape)
+                  (reverse reduce-shape)
+                  (reverse reduce-src-st)
+                  (tensor-grad out)          ;; Source (Big)
+                  (tensor-grad input-tensor) ;; Dest (Small)
+                  ))]))
+
+  (accumulate-grad! A (tensor-grad out))
+  (accumulate-grad! B (tensor-grad out)))
 
   (when grad?
     (set-tensor-backward! out backward))

@@ -284,67 +284,119 @@ GENERATE_BROADCAST_ADD_FUNC(int64, int64_t)
 // -----------------------------------------------------------------------------
 // Reduction Sum Kernel (For Backward Broadcast)
 // -----------------------------------------------------------------------------
-// Similar to broadcast_add but we accumulate gradients.
-// If target shape is smaller than source shape (i.e. broadcast happened),
-// we essentially sum over the broadcasted dimensions.
+// This kernel reduces a 3D tensor-view of shape (outer, reduce, inner)
+// along the 'reduce' dimension.
+// The output shape is (outer, inner).
+// This is sufficient to handle any single-dimension reduction.
+// For multi-dimension reduction, one can call this iteratively (though less
+// efficient). But for standard backward broadcasting, we usually reduce along
+// one or more axes.
 //
-// However, the request specifically asks for "_reduce_sum... kernel".
-// The typical need for bias backward is (M, N) -> (N).
-// This is a "column-wise sum" (sum over M rows).
-//
-// Let's implement a generic reduce_sum that reduces along the FIRST dimension
-// (axis 0). Why axis 0? Because bias broadcast typically adds (N) to (M, N)
-// implicitly acting as (1, N) broadcast to (M, N). So backward is sum over M.
-//
-// We will implement `_reduce_sum_axis0` for simplicity as "reduce_sum" was
-// requested for bias. This sums (M, N, ...) -> (N, ...) Arguments:
-// - outer_dim (M)
-// - inner_size (N * ...) (product of remaining dims)
-// - in_data
-// - out_data
+// Arguments:
+// - outer_dim: Product of dimensions "before" the reduction axis.
+// - reduce_dim: Size of the dimension to reduce.
+// - inner_dim: Product of dimensions "after" the reduction axis.
+// - in_data: Input pointer.
+// - out_data: Output pointer (Accumulates!).
 
-#define GENERATE_REDUCE_SUM_AXIS0_FUNC(SUFFIX, TYPE)                           \
-  API_EXPORT void _reduce_sum_axis0_##SUFFIX(                                  \
-      const size_t outer_dim, const size_t inner_size,                         \
+#define GENERATE_REDUCE_SUM_FUNC(SUFFIX, TYPE)                                 \
+  API_EXPORT void _reduce_sum_##SUFFIX(                                        \
+      const size_t outer_dim, const size_t reduce_dim, const size_t inner_dim, \
       const TYPE *__restrict in_data, TYPE *__restrict out_data) {             \
-    /* Initialize out_data to 0 if we are strictly reducing.                   \
-     * However, gradients are usually ACCUMULATED.                             \
-     * The backward function in racket usually calls this to ADD to existing   \
-     * grad.                                                                   \
-     * Let's assume this function ADDS to out_data (scatter-add style).        \
-     */                                                                        \
                                                                                \
-    /* Strategy: We loop over M rows and accumulate into the result. */        \
-    /* Parallelize over inner_size if large enough, or just serial             \
-     * accumulation*/                                                          \
+    const size_t total_out_elements = outer_dim * inner_dim;                   \
                                                                                \
-    const size_t total_bytes = outer_dim * inner_size * sizeof(TYPE);          \
-                                                                               \
-    if (total_bytes >= PARALLEL_THRESHOLD_BYTES) {                             \
-      /* Parallelize over columns (inner_size) to avoid race conditions on     \
-       * out_data */                                                           \
-      _Pragma("omp parallel for schedule(static)") for (size_t j = 0;          \
-                                                        j < inner_size; j++) { \
-        TYPE sum = 0;                                                          \
-        for (size_t i = 0; i < outer_dim; i++) {                               \
-          sum += in_data[i * inner_size + j];                                  \
+    if (total_out_elements >= PARALLEL_THRESHOLD_BYTES / sizeof(TYPE)) {       \
+      _Pragma("omp parallel for schedule(static)") for (size_t i = 0;          \
+                                                        i < outer_dim; i++) {  \
+        for (size_t k = 0; k < inner_dim; k++) {                               \
+          TYPE sum = 0;                                                        \
+          size_t out_idx = i * inner_dim + k;                                  \
+          size_t in_base = i * reduce_dim * inner_dim + k;                     \
+          for (size_t j = 0; j < reduce_dim; j++) {                            \
+            sum += in_data[in_base + j * inner_dim];                           \
+          }                                                                    \
+          out_data[out_idx] += sum;                                            \
         }                                                                      \
-        out_data[j] += sum;                                                    \
       }                                                                        \
     } else {                                                                   \
-      /* Serial loop */                                                        \
-      for (size_t j = 0; j < inner_size; j++) {                                \
-        TYPE sum = 0;                                                          \
-        for (size_t i = 0; i < outer_dim; i++) {                               \
-          sum += in_data[i * inner_size + j];                                  \
+      for (size_t i = 0; i < outer_dim; i++) {                                 \
+        for (size_t k = 0; k < inner_dim; k++) {                               \
+          TYPE sum = 0;                                                        \
+          size_t out_idx = i * inner_dim + k;                                  \
+          size_t in_base = i * reduce_dim * inner_dim + k;                     \
+          for (size_t j = 0; j < reduce_dim; j++) {                            \
+            sum += in_data[in_base + j * inner_dim];                           \
+          }                                                                    \
+          out_data[out_idx] += sum;                                            \
         }                                                                      \
-        out_data[j] += sum;                                                    \
       }                                                                        \
     }                                                                          \
   }
 
-GENERATE_REDUCE_SUM_AXIS0_FUNC(double, double)
-GENERATE_REDUCE_SUM_AXIS0_FUNC(float, float)
+GENERATE_REDUCE_SUM_FUNC(double, double)
+GENERATE_REDUCE_SUM_FUNC(float, float)
+
+/* * Helper: Unravels a linear index into offsets based on shape/strides.
+ * We use this to map linear loop indices to memory offsets.
+ */
+static inline size_t get_offset(size_t linear_index, size_t ndim,
+                                const size_t *shape, const size_t *strides) {
+  size_t offset = 0;
+  for (int i = ndim - 1; i >= 0; i--) {
+    size_t dim_sz = shape[i];
+    size_t coord = linear_index % dim_sz;
+    linear_index /= dim_sz;
+    offset += coord * strides[i];
+  }
+  return offset;
+}
+
+#define GENERATE_GENERIC_REDUCE(SUFFIX, TYPE)                                  \
+  API_EXPORT void _reduce_sum_generic_##SUFFIX(                                \
+      const size_t n_keep,                                                     \
+      const size_t *keep_shape,       /* Shape of parallel dimensions */       \
+      const size_t *keep_src_strides, /* Stride in the BIG tensor */           \
+      const size_t *keep_dst_strides, /* Stride in the SMALL tensor */         \
+      const size_t n_reduce,                                                   \
+      const size_t *reduce_shape,       /* Shape of collapsed dimensions */    \
+      const size_t *reduce_src_strides, /* Stride in the BIG tensor */         \
+      const TYPE *__restrict src_data, TYPE *__restrict dst_data) {            \
+                                                                               \
+    /* 1. Calculate total iterations for outer and inner loops */              \
+    size_t total_keep = 1;                                                     \
+    for (size_t i = 0; i < n_keep; i++)                                        \
+      total_keep *= keep_shape[i];                                             \
+                                                                               \
+    size_t total_reduce = 1;                                                   \
+    for (size_t i = 0; i < n_reduce; i++)                                      \
+      total_reduce *= reduce_shape[i];                                         \
+                                                                               \
+    /* 2. Parallel Loop over the Output (Keep Dims) */                         \
+    _Pragma("omp parallel for schedule(static)") for (size_t i = 0;            \
+                                                      i < total_keep; i++) {   \
+      /* Map linear 'i' to offsets in Source and Dest */                       \
+      size_t dst_offset = get_offset(i, n_keep, keep_shape, keep_dst_strides); \
+      size_t src_base = get_offset(i, n_keep, keep_shape, keep_src_strides);   \
+                                                                               \
+      TYPE sum = 0;                                                            \
+                                                                               \
+      /* 3. Inner Loop over the Reduction Volume */                            \
+      for (size_t j = 0; j < total_reduce; j++) {                              \
+        size_t reduce_offset =                                                 \
+            get_offset(j, n_reduce, reduce_shape, reduce_src_strides);         \
+        sum += src_data[src_base + reduce_offset];                             \
+      }                                                                        \
+                                                                               \
+      /* Accumulate into existing gradient (AXPY style) or Overwrite? */       \
+      /* Standard is += for gradients. Ensure dst is zeroed before if          \
+       * needed.*/                                                             \
+      dst_data[dst_offset] += sum;                                             \
+    }                                                                          \
+  }
+
+GENERATE_GENERIC_REDUCE(double, double)
+GENERATE_GENERIC_REDUCE(float, float)
 
 /* Backward Tanh Kernel
  * Computes: grad_in += grad_out * (1 - out^2)

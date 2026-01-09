@@ -125,12 +125,27 @@
         (out-data  : _gcpointer)
         -> _void))
 
-(define+provide-aux* _reduce_sum_axis0 (_double _float)
+(define+provide-aux* _reduce_sum (_double _float)
   (_fun (outer-dim  : _size)
-        (inner-size : _size)
+        (reduce-dim : _size)
+        (inner-dim  : _size)
         (in-data    : _gcpointer)
         (out-data   : _gcpointer)
         -> _void))
+
+
+(define+provide-aux* _reduce_sum_generic (_double _float)
+  (_fun
+   (n-keep             : _size)
+   (keep-shape         : (_list i _size))
+   (keep-src-strides   : (_list i _size))
+   (keep-dst-strides   : (_list i _size))
+   (n-reduce           : _size)
+   (reduce-shape       : (_list i _size))
+   (reduce-src-strides : (_list i _size))
+   (src-data           : _gcpointer)
+   (dst-data           : _gcpointer)
+   -> _void))
 
 (define+provide-aux* _backward_tanh (_double _float)
   (_fun (out-data : _gcpointer)
