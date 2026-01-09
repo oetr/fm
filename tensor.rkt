@@ -107,9 +107,47 @@
 ;; -----------------------------------------------------------------------------
 ;; Broadcasting Helpers
 ;; -----------------------------------------------------------------------------
+(define (broadcast-structs shape-A strides-A shape-B strides-B)
+  ;; 1. Pad shapes with 1s on the left to match ranks
+  (define rank-A (length shape-A))
+  (define rank-B (length shape-B))
+  (define max-rank (max rank-A rank-B))
+  
+  (define pad-A (make-list (- max-rank rank-A) 1))
+  (define pad-B (make-list (- max-rank rank-B) 1))
+  
+  ;; padded shapes
+  (define sA (append pad-A shape-A))
+  (define sB (append pad-B shape-B))
+  
+  ;; padded strides (stride for a padded '1' dimension is mathematically irrelevant, use 0)
+  (define stA (append (make-list (- max-rank rank-A) 0) strides-A))
+  (define stB (append (make-list (- max-rank rank-B) 0) strides-B))
+  
+  ;; 2. Unify dimensions
+  (define-values (out-shape new-stA new-stB)
+    (for/lists (dims stAs stBs)
+               ([dimA (in-list sA)]
+                [dimB (in-list sB)]
+                [strideA (in-list stA)]
+                [strideB (in-list stB)])
+      (cond
+        [(= dimA dimB)
+         (values dimA strideA strideB)]
+        [(= dimA 1)
+         ;; Broadcast A: Effective stride becomes 0
+         (values dimB 0 strideB)]
+        [(= dimB 1)
+         ;; Broadcast B: Effective stride becomes 0
+         (values dimA strideA 0)]
+        [else
+         (error 'broadcast "Incompatible shapes: ~a and ~a" shape-A shape-B)])))
+  
+  (values out-shape new-stA new-stB))
+
 
 (define (compatible-shapes? shape-A shape-B)
-  (equal? shape-A shape-B)) 
+  (equal? shape-A shape-B))
 
 (define (broadcast-compatible? shape-A shape-B)
   ;; Simplified broadcasting:
@@ -152,7 +190,7 @@
   (define len (tensor-length A))
 
   ;; Forward Pass
-  (cond 
+  (cond
     [(not broadcast?)
      ;; Standard element-wise add
      (let-typed type-A
@@ -178,7 +216,7 @@
          (define offset (* i N type-size))
          (axpy N 1.0 (tensor-data B) 1 (ptr-add (tensor-data out) offset) 1)))])
 
-  (define backward    
+  (define backward
     (cond [(not broadcast?)
            (let-typed type-A
              ([axpy cblas_daxpy cblas_saxpy])
@@ -307,41 +345,10 @@
     ([tanh! _tanh_double _tanh_float])
     (tanh! (tensor-data out) (tensor-data T) (tensor-length T)))
 
-  ;; d/dx tanh(x) = 1 - tanh(x)^2 = 1 - out^2
   (define (backward)
-    ;; We need to compute: grad_T += grad_out * (1 - out^2)
-    ;; Ideally, we would have a vectorized "mul_one_minus_square" kernel.
-    ;; For now, we'll do this in Racket loop or using basic ops if possible.
-    ;; But wait! We don't have a "1 - x^2" op exposed yet.
-    ;; Let's implement a simple loop here for now, or add a C helper.
-    ;; Given the performance goals, let's assume we should add a C helper or use existing primitives.
-    ;; But I'll use a Racket loop for immediate correctness, then we can optimize.
-    ;; Actually, better: let's use the fact that we have data access.
-    ;; But accessing pointers in Racket loop is slow.
-    ;; I'll stick to a simple loop for now to verify logic.
-    
-    (define len (tensor-length T))
-    (define g-out (tensor-grad out))
-    (define g-in (tensor-grad T))
-    (define val-out (tensor-data out))
-    
-    (define (bwd-cpu-double)
-      (for ([i (in-range len)])
-        (define y (ptr-ref val-out _double i))
-        (define dy (ptr-ref g-out _double i))
-        (define dx (* dy (- 1.0 (* y y))))
-        (define cur-dx (ptr-ref g-in _double i))
-        (ptr-set! g-in _double i (+ cur-dx dx))))
-
-    (define (bwd-cpu-float)
-      (for ([i (in-range len)])
-        (define y (ptr-ref val-out _float i))
-        (define dy (ptr-ref g-out _float i))
-        (define dx (* dy (- 1.0 (* y y))))
-        (define cur-dx (ptr-ref g-in _float i))
-        (ptr-set! g-in _float i (+ cur-dx dx))))
-
-    (if (symbol=? type 'double) (bwd-cpu-double) (bwd-cpu-float)))
+    (let-typed type
+      ([kernel _backward_tanh_double _backward_tanh_float])
+      (kernel (tensor-data out) (tensor-grad out) (tensor-grad T) (tensor-length T))))
 
   (when (not (empty? (tensor-grad T)))
     (set-tensor-backward! out backward))

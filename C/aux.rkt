@@ -115,3 +115,22 @@
         (step : _double)
         -> _void))
 
+(define+provide-aux* _add_broadcast *all-types-without-complex*
+  (_fun (ndim      : _ulong)
+        (shape     : _int64)
+        (A-data    : _gcpointer)
+        (A-strides : _gcpointer)
+        (B-data    : _gcpointer)
+        (B-strides : _gcpointer)
+        (out-data  : _gcpointer)
+        -> _void))
+
+(define+provide-aux* _backward_tanh (_double _float)
+  (_fun (out-data : _gcpointer)
+        (grad-out : _gcpointer)
+        (grad-in  : _gcpointer)
+        (len      : _size)
+        -> _void))
+
+
+

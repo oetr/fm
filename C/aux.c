@@ -187,6 +187,131 @@ API_EXPORT void _arange(int64_t *mem, const uint64_t len, const int64_t from,
   }
 }
 
+/* Helper: Reconstructs the memory offset for A and B from a linear
+ * 'outer_index'. We map the linear index back to N-dimensional coordinates,
+ * then mapped to memory offsets. This runs once per row (not per pixel), so the
+ * division overhead is negligible.
+ */
+static inline void get_broadcast_offsets(size_t outer_index, int ndim,
+                                         const int64_t *restrict shape,
+                                         const int64_t *restrict stridesA,
+                                         const int64_t *restrict stridesB,
+                                         int64_t *offsetA, int64_t *offsetB) {
+  *offsetA = 0;
+  *offsetB = 0;
+
+  // We iterate from the second-to-last dimension up to 0
+  // (The last dimension is handled by the inner SIMD loop)
+  for (int d = ndim - 2; d >= 0; d--) {
+    size_t dim_size = shape[d];
+    size_t coord = outer_index % dim_size;
+    outer_index /= dim_size;
+
+    *offsetA += coord * stridesA[d];
+    *offsetB += coord * stridesB[d];
+  }
+}
+
+/* * Macro to generate generic Broadcast Add Kernels
+ * Supports:
+ * - Arbitrary Ranks
+ * - Arbitrary Strides
+ * - OpenMP Parallelism (Row-based)
+ * - SIMD Vectorization (Inner-dimension)
+ */
+#define GENERATE_BROADCAST_ADD_FUNC(SUFFIX, TYPE)                              \
+  API_EXPORT void _add_broadcast_##SUFFIX(                                     \
+      uint64_t ndim, const int64_t *__restrict shape,                          \
+      const TYPE *__restrict A_data, const int64_t *__restrict A_strides,      \
+      const TYPE *__restrict B_data, const int64_t *__restrict B_strides,      \
+      TYPE *__restrict out_data) {                                             \
+                                                                               \
+    /* 1. Base Case: Handle scalar/empty or 1D quickly */                      \
+    if (ndim == 0)                                                             \
+      return;                                                                  \
+    size_t inner_len = shape[ndim - 1];                                        \
+    size_t outer_len = 1;                                                      \
+    for (int i = 0; i < ndim - 1; i++)                                         \
+      outer_len *= shape[i];                                                   \
+                                                                               \
+    /* Strides for the innermost loop (critical for SIMD) */                   \
+    int64_t stride_A_inner = A_strides[ndim - 1];                              \
+    int64_t stride_B_inner = B_strides[ndim - 1];                              \
+                                                                               \
+    size_t total_bytes = outer_len * inner_len * sizeof(TYPE);                 \
+                                                                               \
+    /* 2. Parallel Loop over the "Outer" dimensions (Rows) */                  \
+    if (total_bytes >= PARALLEL_THRESHOLD_BYTES) {                             \
+      _Pragma("omp parallel for schedule(static)") for (size_t i = 0;          \
+                                                        i < outer_len; i++) {  \
+        int64_t offA, offB;                                                    \
+        get_broadcast_offsets(i, ndim, shape, A_strides, B_strides, &offA,     \
+                              &offB);                                          \
+                                                                               \
+        /* 3. SIMD Loop over the "Inner" dimension (Columns) */                \
+        _Pragma("omp simd") for (size_t j = 0; j < inner_len; j++) {           \
+          out_data[i * inner_len + j] = A_data[offA + j * stride_A_inner] +    \
+                                        B_data[offB + j * stride_B_inner];     \
+        }                                                                      \
+      }                                                                        \
+    } else {                                                                   \
+      /* Serial Fallback for small tensors */                                  \
+      for (size_t i = 0; i < outer_len; i++) {                                 \
+        int64_t offA, offB;                                                    \
+        get_broadcast_offsets(i, ndim, shape, A_strides, B_strides, &offA,     \
+                              &offB);                                          \
+                                                                               \
+        _Pragma("omp simd") for (size_t j = 0; j < inner_len; j++) {           \
+          out_data[i * inner_len + j] = A_data[offA + j * stride_A_inner] +    \
+                                        B_data[offB + j * stride_B_inner];     \
+        }                                                                      \
+      }                                                                        \
+    }                                                                          \
+  }
+
+// Instantiate for all required types
+GENERATE_BROADCAST_ADD_FUNC(double, double)
+GENERATE_BROADCAST_ADD_FUNC(float, float)
+GENERATE_BROADCAST_ADD_FUNC(uint8, uint8_t)
+GENERATE_BROADCAST_ADD_FUNC(int8, int8_t)
+GENERATE_BROADCAST_ADD_FUNC(uint16, uint16_t)
+GENERATE_BROADCAST_ADD_FUNC(int16, int16_t)
+GENERATE_BROADCAST_ADD_FUNC(uint32, uint32_t)
+GENERATE_BROADCAST_ADD_FUNC(int32, int32_t)
+GENERATE_BROADCAST_ADD_FUNC(uint64, uint64_t)
+GENERATE_BROADCAST_ADD_FUNC(int64, int64_t)
+
+/* Backward Tanh Kernel
+ * Computes: grad_in += grad_out * (1 - out^2)
+ * TODO: We iterate linearly. Add support for non-contiguous views/slices later.
+ * Will need strided iterators here like in the broadcast kernel.
+ */
+#define GENERATE_BACKWARD_TANH_FUNC(SUFFIX, TYPE)                              \
+  API_EXPORT void _backward_tanh_##SUFFIX(                                     \
+      const TYPE *__restrict out_data, const TYPE *__restrict grad_out,        \
+      TYPE *__restrict grad_in, const size_t len) {                            \
+                                                                               \
+    const size_t data_size = len * sizeof(TYPE);                               \
+                                                                               \
+    if (data_size >= PARALLEL_THRESHOLD_BYTES) {                               \
+      _Pragma("omp parallel for simd schedule(static)") for (size_t i = 0;     \
+                                                             i < len; i++) {   \
+        TYPE y = out_data[i];                                                  \
+        TYPE dy = grad_out[i];                                                 \
+        grad_in[i] += dy * (1.0 - y * y);                                      \
+      }                                                                        \
+    } else {                                                                   \
+      _Pragma("omp simd") for (size_t i = 0; i < len; i++) {                   \
+        TYPE y = out_data[i];                                                  \
+        TYPE dy = grad_out[i];                                                 \
+        grad_in[i] += dy * (1.0 - y * y);                                      \
+      }                                                                        \
+    }                                                                          \
+  }
+
+GENERATE_BACKWARD_TANH_FUNC(double, double)
+GENERATE_BACKWARD_TANH_FUNC(float, float)
+
 /* returns a 1D-array containing the 'len' numbers that start from 'from' and
  * stepsize 'step' */
 /* This assumes that sanity checks have been done in racket and that 'mem' has
