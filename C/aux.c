@@ -136,6 +136,39 @@ GENERATE_MUL_ADD_FUNC(int32, int32_t)
 GENERATE_MUL_ADD_FUNC(uint64, uint64_t)
 GENERATE_MUL_ADD_FUNC(int64, int64_t)
 
+// -----------------------------------------------------------------------------
+// Activation Functions
+// -----------------------------------------------------------------------------
+
+#define GENERATE_UNARY_FUNC(NAME, SUFFIX, TYPE, FUNC_BODY)                     \
+  API_EXPORT void _##NAME##_##SUFFIX(TYPE *out, const TYPE *in,                \
+                                     const size_t len) {                       \
+    const size_t data_size = len * sizeof(TYPE);                               \
+    if (data_size >= PARALLEL_THRESHOLD_BYTES) {                               \
+      _Pragma("omp parallel for simd schedule(static)") for (size_t i = 0;     \
+                                                             i < len; i++) {   \
+        out[i] = FUNC_BODY(in[i]);                                             \
+      }                                                                        \
+    } else {                                                                   \
+      _Pragma("omp simd") for (size_t i = 0; i < len; i++) {                   \
+        out[i] = FUNC_BODY(in[i]);                                             \
+      }                                                                        \
+    }                                                                          \
+  }
+
+// --- Tanh ---
+// tanh(x) is standard C math
+GENERATE_UNARY_FUNC(tanh, double, double, tanh)
+GENERATE_UNARY_FUNC(tanh, float, float, tanhf)
+
+// --- Sigmoid ---
+// sigmoid(x) = 1 / (1 + exp(-x))
+static inline double sigmoid_double(double x) { return 1.0 / (1.0 + exp(-x)); }
+static inline float sigmoid_float(float x) { return 1.0f / (1.0f + expf(-x)); }
+
+GENERATE_UNARY_FUNC(sigmoid, double, double, sigmoid_double)
+GENERATE_UNARY_FUNC(sigmoid, float, float, sigmoid_float)
+
 /* returns a 1D-array containing the 'len' numbers that start from 'from' and
  * stepsize 'step'
  * This assumes that sanity checks have been done in racket and that 'mem' has

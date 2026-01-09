@@ -88,6 +88,19 @@
         (len   :  _ulong)
         -> _void))
 
+;; --- Activation functions ---
+(define+provide-aux* _tanh (_double _float)
+  (_fun (out : _gcpointer)
+        (in  : _gcpointer)
+        (len : _ulong)
+        -> _void))
+
+(define+provide-aux* _sigmoid (_double _float)
+  (_fun (out : _gcpointer)
+        (in  : _gcpointer)
+        (len : _ulong)
+        -> _void))
+
 (define-ffi+provide _arange
   (_fun (mem  :  _gcpointer)
         (len  :  _ulong)
