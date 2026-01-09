@@ -269,7 +269,6 @@ static inline void get_broadcast_offsets(size_t outer_index, int ndim,
     }                                                                          \
   }
 
-// Instantiate for all required types
 GENERATE_BROADCAST_ADD_FUNC(double, double)
 GENERATE_BROADCAST_ADD_FUNC(float, float)
 GENERATE_BROADCAST_ADD_FUNC(uint8, uint8_t)
@@ -336,6 +335,14 @@ GENERATE_BROADCAST_ADD_FUNC(int64, int64_t)
 
 GENERATE_REDUCE_SUM_FUNC(double, double)
 GENERATE_REDUCE_SUM_FUNC(float, float)
+GENERATE_REDUCE_SUM_FUNC(int64, int64_t)
+GENERATE_REDUCE_SUM_FUNC(uint64, uint64_t)
+GENERATE_REDUCE_SUM_FUNC(int32, int32_t)
+GENERATE_REDUCE_SUM_FUNC(uint32, uint32_t)
+GENERATE_REDUCE_SUM_FUNC(int16, int16_t)
+GENERATE_REDUCE_SUM_FUNC(uint16, uint16_t)
+GENERATE_REDUCE_SUM_FUNC(int8, int8_t)
+GENERATE_REDUCE_SUM_FUNC(uint8, uint8_t)
 
 /* * Helper: Unravels a linear index into offsets based on shape/strides.
  * We use this to map linear loop indices to memory offsets.
@@ -397,6 +404,14 @@ static inline size_t get_offset(size_t linear_index, size_t ndim,
 
 GENERATE_GENERIC_REDUCE(double, double)
 GENERATE_GENERIC_REDUCE(float, float)
+GENERATE_GENERIC_REDUCE(int64, int64_t)
+GENERATE_GENERIC_REDUCE(uint64, uint64_t)
+GENERATE_GENERIC_REDUCE(int32, int32_t)
+GENERATE_GENERIC_REDUCE(uint32, uint32_t)
+GENERATE_GENERIC_REDUCE(int16, int16_t)
+GENERATE_GENERIC_REDUCE(uint16, uint16_t)
+GENERATE_GENERIC_REDUCE(int8, int8_t)
+GENERATE_GENERIC_REDUCE(uint8, uint8_t)
 
 /* Backward Tanh Kernel
  * Computes: grad_in += grad_out * (1 - out^2)
