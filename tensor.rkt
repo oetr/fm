@@ -155,6 +155,61 @@
                            shape-B (make-list (length shape-B) 1))
         #t)))
 
+
+(define (accumulate-grad! input-tensor out)
+  (define type-A (tensor-type input-tensor))
+  (define grad-out (tensor-grad out))
+  (define in-shape (tensor-shape input-tensor))
+  (define out-shape (tensor-shape out))
+
+  (cond
+    ;; Optimization: Simple 1:1 match
+    [(equal? in-shape out-shape)
+     (let-typed type-A
+       ([axpy cblas_daxpy cblas_saxpy])
+       (axpy (tensor-length out) 1.0 grad-out 1 (tensor-grad input-tensor) 1))]
+
+    [else
+     ;; 1. Pad input shape to match output rank
+     (define rank-out (length out-shape))
+     (define pad-len  (- rank-out (length in-shape)))
+     (define padded-in-shape (append (make-list pad-len 1) in-shape))
+
+     ;; 2. Categorize Dimensions into KEEP vs REDUCE
+     (define-values (keep-shape keep-src-st keep-dst-st
+                                reduce-shape reduce-src-st)
+       (for/fold ([ks '()] [kss '()] [kds '()]
+                           [rs '()] [rss '()])
+                 ([d-in  (in-list padded-in-shape)]
+                  [d-out (in-list out-shape)]
+                  [st-out (in-list (tensor-strides out))]
+                  [st-in  (in-list (append (make-list pad-len 0) (tensor-strides input-tensor)))])
+         (cond
+           ;; If input dim is 1 and output > 1, this is a REDUCTION axis
+           [(and (= d-in 1) (> d-out 1))
+            (values ks kss kds
+                    (cons d-out rs) (cons st-out rss))]
+           ;; Otherwise, it is a PARALLEL (Keep) axis
+           [else
+            (values (cons d-out ks) (cons st-out kss) (cons st-in kds)
+                    rs rss)])))
+
+     ;; 3. Call Generic C Kernel
+     (let-typed-c type-A
+       ([reduce! _reduce_sum_generic])
+
+       ;; Note: We collected in reverse order, so we reverse back to C order
+       (reduce! (length keep-shape)
+                (reverse keep-shape)
+                (reverse keep-src-st)
+                (reverse keep-dst-st)
+                (length reduce-shape)
+                (reverse reduce-shape)
+                (reverse reduce-src-st)
+                (tensor-grad out)          ;; Source (Big)
+                (tensor-grad input-tensor) ;; Dest (Small)
+                ))]))
+
 (define+provide (tensor-add A B)
   (define type-A (tensor-type A))
   (define type-B (tensor-type B))
@@ -203,66 +258,91 @@
           (tensor-data out)))
 
   (define (backward)
-    ;; Helper to accumulate gradients properly when broadcasting occurs.
-    ;; If shape(out) == shape(input), direct axpy.
-    ;; If broadcast occurred, we need to reduce sum over the broadcasted dimensions.
-    (define (accumulate-grad! input-tensor grad-out)
-    (define in-shape (tensor-shape input-tensor))
-    (define out-shape (tensor-shape out))
-    
-    (cond
-      ;; Optimization: Simple 1:1 match
-      [(equal? in-shape out-shape)
-       (let-typed type-A
-         ([axpy cblas_daxpy cblas_saxpy])
-         (axpy (tensor-length out) 1.0 grad-out 1 (tensor-grad input-tensor) 1))]
-
-      [else
-       ;; 1. Pad input shape to match output rank
-       (define rank-out (length out-shape))
-       (define pad-len  (- rank-out (length in-shape)))
-       (define padded-in-shape (append (make-list pad-len 1) in-shape))
-       
-       ;; 2. Categorize Dimensions into KEEP vs REDUCE
-       (define-values (keep-shape keep-src-st keep-dst-st
-                       reduce-shape reduce-src-st)
-         (for/fold ([ks '()] [kss '()] [kds '()]
-                    [rs '()] [rss '()])
-                   ([d-in  (in-list padded-in-shape)]
-                    [d-out (in-list out-shape)]
-                    [st-out (in-list (tensor-strides out))]
-                    [st-in  (in-list (append (make-list pad-len 0) (tensor-strides input-tensor)))])
-           (cond
-             ;; If input dim is 1 and output > 1, this is a REDUCTION axis
-             [(and (= d-in 1) (> d-out 1))
-              (values ks kss kds
-                      (cons d-out rs) (cons st-out rss))]
-             ;; Otherwise, it is a PARALLEL (Keep) axis
-             [else
-              (values (cons d-out ks) (cons st-out kss) (cons st-in kds)
-                      rs rss)])))
-       
-       ;; 3. Call Generic C Kernel
-       (let-typed-c type-A
-         ([reduce! _reduce_sum_generic])
-         
-         ;; Note: We collected in reverse order, so we reverse back to C order
-         (reduce! (length keep-shape)
-                  (reverse keep-shape)
-                  (reverse keep-src-st)
-                  (reverse keep-dst-st)
-                  (length reduce-shape)
-                  (reverse reduce-shape)
-                  (reverse reduce-src-st)
-                  (tensor-grad out)          ;; Source (Big)
-                  (tensor-grad input-tensor) ;; Dest (Small)
-                  ))]))
-
-  (accumulate-grad! A (tensor-grad out))
-  (accumulate-grad! B (tensor-grad out)))
+    (accumulate-grad! A out)
+    (accumulate-grad! B out))
 
   (when grad?
     (set-tensor-backward! out backward))
+  out)
+
+(define+provide (tensor-add-out! out A B)
+  (define type-out (tensor-type out))
+  (define type-A (tensor-type A))
+  (define type-B (tensor-type B))
+
+  ;; 1. Type Validation
+  (unless (and (symbol=? type-out type-A) (symbol=? type-out type-B))
+    (error 'tensor-add-out!
+           "Type mismatch: out=~a, A=~a, B=~a. All must match."
+           type-out type-A type-B))
+
+  ;; 2. Shape Validation
+  (define shape-A (tensor-shape A))
+  (define shape-B (tensor-shape B))
+  (define strides-A (tensor-strides A))
+  (define strides-B (tensor-strides B))
+
+  ;; Calculate what the result shape should be
+  (define-values (expected-shape broadcast-strides-A broadcast-strides-B)
+    (broadcast-structs shape-A strides-A shape-B strides-B))
+
+  (unless (equal? (tensor-shape out) expected-shape)
+    (error 'tensor-add-out!
+           "Shape mismatch: 'out' has shape ~a but result of A+B is ~a"
+           (tensor-shape out) expected-shape))
+
+  ;; Aliasing Safety Check (The 'Restrict' Guard)
+  (define ptr-out (tensor-data out))
+  (define ptr-A (tensor-data A))
+  (define ptr-B (tensor-data B))
+
+  (when (or (equal? ptr-out ptr-A)
+            (equal? ptr-out ptr-B))
+    (error 'tensor-add-out!
+           "Aliasing detected: 'out' shares memory with input A or B.
+           The current C kernel uses 'restrict' and cannot handle in-place operations safe.
+           Please use a distinct tensor for output."))
+
+  ;; Autograd Graph Wiring
+  (define A-grad? (not (empty? (tensor-grad A))))
+  (define B-grad? (not (empty? (tensor-grad B))))
+  (define grad? (or A-grad? B-grad?))
+
+  (cond
+    [grad?
+     ;; Ensure 'out' can propagate gradients back
+     (tensor-requires-grad! out)
+     (tensor-requires-grad! A)
+     (tensor-requires-grad! B)
+
+     ;; Wire the graph: out is now the parent of A and B
+     (set-tensor-children! out (list A B))
+
+     ;; Define the backward pass
+     ;; Note: Addition is stateless, so we don't need to capture 'A' or 'B' values,
+     ;; just their shapes/nodes. This is safe even if A or B change later.
+     (define (backward)
+       (accumulate-grad! A out)
+       (accumulate-grad! B out))
+
+     (set-tensor-backward! out backward)]
+
+    [else
+     ;; Else: Detach 'out' from any previous history to prevent zombie graphs
+     (begin
+       (set-tensor-children! out empty)
+       (set-tensor-backward! out void))])
+
+  ;; 5. Execution (The Fast Path)
+  (let-typed-c type-out
+    ([add! _add_broadcast])
+    (add! (tensor-rank out)
+          (tensor-shape out)
+          (tensor-data A)   broadcast-strides-A
+          (tensor-data B)   broadcast-strides-B
+          (tensor-data out)))
+
+  ;; Return 'out' to allow chaining (e.g., (tensor-print (tensor-add-out! ...)))
   out)
 
 
