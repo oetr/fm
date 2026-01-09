@@ -8,7 +8,7 @@
          "./private/utilities.rkt"
          "./C/aux.rkt")
 
-(define+provide (tensor-length A) (apply * (tensor-shape A)))
+(define+provide (tensor-length A) (for/product ([dim-len (tensor-shape A)]) dim-len))
 
 (define+provide (tensor-rank A) (length (tensor-shape A)))
 
