@@ -125,6 +125,13 @@
         (out-data  : _gcpointer)
         -> _void))
 
+(define+provide-aux* _reduce_sum_axis0 (_double _float)
+  (_fun (outer-dim  : _size)
+        (inner-size : _size)
+        (in-data    : _gcpointer)
+        (out-data   : _gcpointer)
+        -> _void))
+
 (define+provide-aux* _backward_tanh (_double _float)
   (_fun (out-data : _gcpointer)
         (grad-out : _gcpointer)

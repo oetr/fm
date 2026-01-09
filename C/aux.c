@@ -281,6 +281,71 @@ GENERATE_BROADCAST_ADD_FUNC(int32, int32_t)
 GENERATE_BROADCAST_ADD_FUNC(uint64, uint64_t)
 GENERATE_BROADCAST_ADD_FUNC(int64, int64_t)
 
+// -----------------------------------------------------------------------------
+// Reduction Sum Kernel (For Backward Broadcast)
+// -----------------------------------------------------------------------------
+// Similar to broadcast_add but we accumulate gradients.
+// If target shape is smaller than source shape (i.e. broadcast happened),
+// we essentially sum over the broadcasted dimensions.
+//
+// However, the request specifically asks for "_reduce_sum... kernel".
+// The typical need for bias backward is (M, N) -> (N).
+// This is a "column-wise sum" (sum over M rows).
+//
+// Let's implement a generic reduce_sum that reduces along the FIRST dimension
+// (axis 0). Why axis 0? Because bias broadcast typically adds (N) to (M, N)
+// implicitly acting as (1, N) broadcast to (M, N). So backward is sum over M.
+//
+// We will implement `_reduce_sum_axis0` for simplicity as "reduce_sum" was
+// requested for bias. This sums (M, N, ...) -> (N, ...) Arguments:
+// - outer_dim (M)
+// - inner_size (N * ...) (product of remaining dims)
+// - in_data
+// - out_data
+
+#define GENERATE_REDUCE_SUM_AXIS0_FUNC(SUFFIX, TYPE)                           \
+  API_EXPORT void _reduce_sum_axis0_##SUFFIX(                                  \
+      const size_t outer_dim, const size_t inner_size,                         \
+      const TYPE *__restrict in_data, TYPE *__restrict out_data) {             \
+    /* Initialize out_data to 0 if we are strictly reducing.                   \
+     * However, gradients are usually ACCUMULATED.                             \
+     * The backward function in racket usually calls this to ADD to existing   \
+     * grad.                                                                   \
+     * Let's assume this function ADDS to out_data (scatter-add style).        \
+     */                                                                        \
+                                                                               \
+    /* Strategy: We loop over M rows and accumulate into the result. */        \
+    /* Parallelize over inner_size if large enough, or just serial             \
+     * accumulation*/                                                          \
+                                                                               \
+    const size_t total_bytes = outer_dim * inner_size * sizeof(TYPE);          \
+                                                                               \
+    if (total_bytes >= PARALLEL_THRESHOLD_BYTES) {                             \
+      /* Parallelize over columns (inner_size) to avoid race conditions on     \
+       * out_data */                                                           \
+      _Pragma("omp parallel for schedule(static)") for (size_t j = 0;          \
+                                                        j < inner_size; j++) { \
+        TYPE sum = 0;                                                          \
+        for (size_t i = 0; i < outer_dim; i++) {                               \
+          sum += in_data[i * inner_size + j];                                  \
+        }                                                                      \
+        out_data[j] += sum;                                                    \
+      }                                                                        \
+    } else {                                                                   \
+      /* Serial loop */                                                        \
+      for (size_t j = 0; j < inner_size; j++) {                                \
+        TYPE sum = 0;                                                          \
+        for (size_t i = 0; i < outer_dim; i++) {                               \
+          sum += in_data[i * inner_size + j];                                  \
+        }                                                                      \
+        out_data[j] += sum;                                                    \
+      }                                                                        \
+    }                                                                          \
+  }
+
+GENERATE_REDUCE_SUM_AXIS0_FUNC(double, double)
+GENERATE_REDUCE_SUM_AXIS0_FUNC(float, float)
+
 /* Backward Tanh Kernel
  * Computes: grad_in += grad_out * (1 - out^2)
  * TODO: We iterate linearly. Add support for non-contiguous views/slices later.
