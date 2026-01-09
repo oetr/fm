@@ -205,7 +205,6 @@
   (define type-A (tensor-type A))
   (define type-B (tensor-type B))
   ;; check supported types
-  ;; check supported types
   (unless (symbol=? type-A type-B)
     (error 'tensor-mul "both tensors should be of the same type, but were: ~a and ~a~n" type-A type-B))
   (unless (or (symbol=? type-A 'double) (symbol=? type-A 'float))
@@ -237,15 +236,173 @@
     (set-tensor-backward! out backward))
   out)
 
-(module+ test-tensor-add
-  (define A (make-tensor (list 3 3) 1.0 #:type 'double))
-  (define B (make-tensor (list 3 3) 2.0 #:type 'double))
-  (tensor-requires-grad! A B)
-  (define C (tensor-add A B))
-  (define D (tensor-mul A C))
-  (backward! D)
-  D
-  )
+(define+provide (tensor-matmul A B)
+  (define type-A (tensor-type A))
+  (define type-B (tensor-type B))
+  
+  (unless (symbol=? type-A type-B)
+    (error 'tensor-matmul "tensors must have same type, got: ~a and ~a" type-A type-B))
+  (unless (or (symbol=? type-A 'double) (symbol=? type-A 'float))
+    (raise-argument-error 'tensor-matmul "tensor:double or tensor:float" 0 A B))
+
+  ;; For now, assume 2D matrices
+  (when (or (not (= (tensor-rank A) 2)) (not (= (tensor-rank B) 2)))
+     (error 'tensor-matmul "only 2D matrices supported currently"))
+
+  (match-define (list M K) (tensor-shape A))
+  (match-define (list K2 N) (tensor-shape B))
+  
+  (unless (= K K2)
+    (error 'tensor-matmul "shapes incompatible for matmul: ~a vs ~a" (tensor-shape A) (tensor-shape B)))
+
+  (define out (make-tensor (list M N) #:type type-A #:children (list A B)))
+
+  (define A-grad? (not (empty? (tensor-grad A))))
+  (define B-grad? (not (empty? (tensor-grad B))))
+  (define grad? (or A-grad? B-grad?))
+
+  (when grad?
+    (tensor-requires-grad! out)
+    (tensor-requires-grad! A)
+    (tensor-requires-grad! B))
+
+  (define cblas-gemm (if (symbol=? type-A 'double) cblas_dgemm cblas_sgemm))
+  
+  ;; C = alpha*A*B + beta*C
+  ;; We want C = 1*A*B + 0*C
+  ;; RowMajor = 101, NoTrans = 111
+  (cblas-gemm 101 111 111 M N K 1.0 (tensor-data A) K (tensor-data B) N 0.0 (tensor-data out) N)
+
+  (define (backward)
+    (define cblas-gemm (if (symbol=? type-A 'double) cblas_dgemm cblas_sgemm))
+    ;; dA += dC * B^T
+    (cblas-gemm 101 111 112 M K N 1.0 (tensor-grad out) N (tensor-data B) N 1.0 (tensor-grad A) K)
+    ;; dB += A^T * dC
+    (cblas-gemm 101 112 111 K N M 1.0 (tensor-data A) K (tensor-grad out) N 1.0 (tensor-grad B) N))
+
+  (when grad?
+    (set-tensor-backward! out backward))
+  out)
+
+(define+provide (tensor-tanh T)
+  (define type (tensor-type T))
+  (unless (or (symbol=? type 'double) (symbol=? type 'float))
+    (raise-argument-error 'tensor-tanh "tensor:double or tensor:float" 0 T))
+
+  (define out (make-tensor (tensor-shape T) #:type type #:children (list T)))
+
+  (when (not (empty? (tensor-grad T)))
+    (tensor-requires-grad! out))
+
+  (define tanh! (if (symbol=? type 'double) _tanh_double _tanh_float))
+  (tanh! (tensor-data out) (tensor-data T) (tensor-length T))
+
+  ;; d/dx tanh(x) = 1 - tanh(x)^2 = 1 - out^2
+  (define (backward)
+    ;; We need to compute: grad_T += grad_out * (1 - out^2)
+    ;; Ideally, we would have a vectorized "mul_one_minus_square" kernel.
+    ;; For now, we'll do this in Racket loop or using basic ops if possible.
+    ;; But wait! We don't have a "1 - x^2" op exposed yet.
+    ;; Let's implement a simple loop here for now, or add a C helper.
+    ;; Given the performance goals, let's assume we should add a C helper or use existing primitives.
+    ;; But I'll use a Racket loop for immediate correctness, then we can optimize.
+    ;; Actually, better: let's use the fact that we have data access.
+    ;; But accessing pointers in Racket loop is slow.
+    ;; I'll stick to a simple loop for now to verify logic.
+    
+    (define len (tensor-length T))
+    (define g-out (tensor-grad out))
+    (define g-in (tensor-grad T))
+    (define val-out (tensor-data out))
+    
+    (define (bwd-cpu-double)
+       (for ([i (in-range len)])
+         (define y (ptr-ref val-out _double i))
+         (define dy (ptr-ref g-out _double i))
+         (define dx (* dy (- 1.0 (* y y))))
+         (define cur-dx (ptr-ref g-in _double i))
+         (ptr-set! g-in _double i (+ cur-dx dx))))
+
+     (define (bwd-cpu-float)
+       (for ([i (in-range len)])
+         (define y (ptr-ref val-out _float i))
+         (define dy (ptr-ref g-out _float i))
+         (define dx (* dy (- 1.0 (* y y))))
+         (define cur-dx (ptr-ref g-in _float i))
+         (ptr-set! g-in _float i (+ cur-dx dx))))
+
+     (if (symbol=? type 'double) (bwd-cpu-double) (bwd-cpu-float)))
+
+  (when (not (empty? (tensor-grad T)))
+    (set-tensor-backward! out backward))
+  out)
+
+(module+ test
+  (require rackunit)
+
+  (test-case "tensor-tanh"
+    (define A (make-tensor (list 2) 0.0 #:type 'double))
+    (tensor-requires-grad! A)
+    (define B (tensor-tanh A))
+    ;; tanh(0) = 0
+    (check-= (ptr-ref (tensor-data B) _double 0) 0.0 1e-5)
+    
+    (backward! B)
+    ;; d/dx tanh(x) at 0 = 1 - 0^2 = 1
+    (check-= (ptr-ref (tensor-grad A) _double 0) 1.0 1e-5))
+
+  (test-case "tensor-add-broadcast"
+    (define A (make-tensor (list 2 2) 1.0 #:type 'double))
+    (define B (make-tensor (list 2) 2.0 #:type 'double)) ;; Vector of 2s
+    (tensor-requires-grad! A B)
+    
+    ;; C = A + B (broadcast)
+    ;; [[1,1],[1,1]] + [2,2] -> [[3,3],[3,3]]
+    (define C (tensor-add A B))
+    (define data (tensor-data C))
+    (check-= (ptr-ref data _double 0) 3.0 1e-5)
+    (check-= (ptr-ref data _double 1) 3.0 1e-5)
+    (check-= (ptr-ref data _double 2) 3.0 1e-5)
+    (check-= (ptr-ref data _double 3) 3.0 1e-5)
+    
+    (backward! C)
+    ;; dC/dA = 1. dC/dB = sum_rows(1) = 2 (since A has 2 rows)
+    ;; Grad C is filled with 1.0 by default in backward!
+    
+    ;; Grad A should be 1.0
+    (check-= (ptr-ref (tensor-grad A) _double 0) 1.0 1e-5)
+    
+    ;; Grad B should be 2.0 (sum of gradients from both rows)
+    (check-= (ptr-ref (tensor-grad B) _double 0) 2.0 1e-5)
+    (check-= (ptr-ref (tensor-grad B) _double 1) 2.0 1e-5))
+
+  (test-case "tensor-add"
+    (define A (make-tensor (list 3 3) 1.0 #:type 'double))
+    (define B (make-tensor (list 3 3) 2.0 #:type 'double))
+    (tensor-requires-grad! A B)
+    (define C (tensor-add A B))
+    (define D (tensor-mul A C))
+    (backward! D)
+    (check-true (tensor? D)))
+
+  (test-case "tensor-matmul"
+    (define A (make-tensor '(2 3) 1.0 #:type 'double)) ;; 2x3 matrix of 1s
+    (define B (make-tensor '(3 2) 2.0 #:type 'double)) ;; 3x2 matrix of 2s
+  
+    ;; C = A * B -> (2x3) * (3x2) -> (2x2)
+    ;; each element C_ij = sum(A_ik * B_kj) = sum(1.0 * 2.0) for k=0..2 = 2.0 * 3 = 6.0
+    (define C (tensor-matmul A B))
+  
+    (check-equal? (tensor-shape C) '(2 2))
+    
+    ;; Check values
+    (define data (tensor-data C))
+    (check-= (ptr-ref data _double 0) 6.0 1e-5)
+    (check-= (ptr-ref data _double 1) 6.0 1e-5)
+    (check-= (ptr-ref data _double 2) 6.0 1e-5)
+    (check-= (ptr-ref data _double 3) 6.0 1e-5)
+  ))
+
 
 (module+ another-test
   (make-tensor (list 100 1) 15 #:type 'uint8)
