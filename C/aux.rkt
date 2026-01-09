@@ -124,6 +124,16 @@
         (out-data  : _gcpointer)
         -> _void))
 
+(define+provide-aux* _mul_broadcast *all-types-without-complex*
+  (_fun (ndim      : _ulong)
+        (shape     : (_list i _uint64))
+        (A-data    : _gcpointer)
+        (A-strides : (_list i _uint64))
+        (B-data    : _gcpointer)
+        (B-strides : (_list i _uint64))
+        (out-data  : _gcpointer)
+        -> _void))
+
 (define+provide-aux* _reduce_sum *all-types-without-complex*
   (_fun (outer-dim  : _size)
         (reduce-dim : _size)

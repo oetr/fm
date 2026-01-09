@@ -280,6 +280,66 @@ GENERATE_BROADCAST_ADD_FUNC(int32, int32_t)
 GENERATE_BROADCAST_ADD_FUNC(uint64, uint64_t)
 GENERATE_BROADCAST_ADD_FUNC(int64, int64_t)
 
+
+/* * Macro to generate generic Broadcast Mul Kernels
+ * Identical to Add, but with multiplication.
+ */
+#define GENERATE_BROADCAST_MUL_FUNC(SUFFIX, TYPE)                              \
+  API_EXPORT void _mul_broadcast_##SUFFIX(                                     \
+      uint64_t ndim, const int64_t *__restrict shape,                          \
+      const TYPE *__restrict A_data, const int64_t *__restrict A_strides,      \
+      const TYPE *__restrict B_data, const int64_t *__restrict B_strides,      \
+      TYPE *__restrict out_data) {                                             \
+                                                                               \
+    if (ndim == 0)                                                             \
+      return;                                                                  \
+    size_t inner_len = shape[ndim - 1];                                        \
+    size_t outer_len = 1;                                                      \
+    for (int i = 0; i < ndim - 1; i++)                                         \
+      outer_len *= shape[i];                                                   \
+                                                                               \
+    int64_t stride_A_inner = A_strides[ndim - 1];                              \
+    int64_t stride_B_inner = B_strides[ndim - 1];                              \
+                                                                               \
+    size_t total_bytes = outer_len * inner_len * sizeof(TYPE);                 \
+                                                                               \
+    if (total_bytes >= PARALLEL_THRESHOLD_BYTES) {                             \
+      _Pragma("omp parallel for schedule(static)") for (size_t i = 0;          \
+                                                        i < outer_len; i++) {  \
+        int64_t offA, offB;                                                    \
+        get_broadcast_offsets(i, ndim, shape, A_strides, B_strides, &offA,     \
+                              &offB);                                          \
+                                                                               \
+        _Pragma("omp simd") for (size_t j = 0; j < inner_len; j++) {           \
+          out_data[i * inner_len + j] = A_data[offA + j * stride_A_inner] *    \
+                                        B_data[offB + j * stride_B_inner];     \
+        }                                                                      \
+      }                                                                        \
+    } else {                                                                   \
+      for (size_t i = 0; i < outer_len; i++) {                                 \
+        int64_t offA, offB;                                                    \
+        get_broadcast_offsets(i, ndim, shape, A_strides, B_strides, &offA,     \
+                              &offB);                                          \
+                                                                               \
+        _Pragma("omp simd") for (size_t j = 0; j < inner_len; j++) {           \
+          out_data[i * inner_len + j] = A_data[offA + j * stride_A_inner] *    \
+                                        B_data[offB + j * stride_B_inner];     \
+        }                                                                      \
+      }                                                                        \
+    }                                                                          \
+  }
+
+GENERATE_BROADCAST_MUL_FUNC(double, double)
+GENERATE_BROADCAST_MUL_FUNC(float, float)
+GENERATE_BROADCAST_MUL_FUNC(uint8, uint8_t)
+GENERATE_BROADCAST_MUL_FUNC(int8, int8_t)
+GENERATE_BROADCAST_MUL_FUNC(uint16, uint16_t)
+GENERATE_BROADCAST_MUL_FUNC(int16, int16_t)
+GENERATE_BROADCAST_MUL_FUNC(uint32, uint32_t)
+GENERATE_BROADCAST_MUL_FUNC(int32, int32_t)
+GENERATE_BROADCAST_MUL_FUNC(uint64, uint64_t)
+GENERATE_BROADCAST_MUL_FUNC(int64, int64_t)
+
 // -----------------------------------------------------------------------------
 // Reduction Sum Kernel (For Backward Broadcast)
 // -----------------------------------------------------------------------------

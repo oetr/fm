@@ -44,6 +44,30 @@
   (check-= (ptr-ref (tensor-grad B) _double 0) 2.0 1e-5)
   (check-= (ptr-ref (tensor-grad B) _double 1) 2.0 1e-5))
 
+(test-case "tensor-mul-broadcast"
+  ;; A: (2, 2)
+  ;; B: (2, 1) -> broadcasts to (2, 2)
+  ;; C = A * B
+  (define A (make-tensor '(2 2) 2.0 #:type 'double))
+  (define B (make-tensor '(2 1) 3.0 #:type 'double))
+  (tensor-requires-grad! A B)
+  
+  (define C (tensor-mul A B))
+  ;; C should be all 6.0
+  (check-= (ptr-ref (tensor-data C) _double 0) 6.0 1e-5)
+  (check-= (ptr-ref (tensor-data C) _double 3) 6.0 1e-5)
+  
+  (backward! C)
+  
+  ;; dC/dA = B (broadcasted) -> (2, 2) full of 3.0s
+  (check-= (ptr-ref (tensor-grad A) _double 0) 3.0 1e-5)
+  
+  ;; dC/dB = sum(dC/dC * A) along axis 1
+  ;;       = sum(1 * A)
+  ;;       = sum([2, 2]) = 4.0 for each row
+  (check-= (ptr-ref (tensor-grad B) _double 0) 4.0 1e-5)
+  (check-= (ptr-ref (tensor-grad B) _double 1) 4.0 1e-5))
+
 (test-case "tensor-add"
   (define A (make-tensor (list 3 3) 1.0 #:type 'double))
   (define B (make-tensor (list 3 3) 2.0 #:type 'double))
@@ -237,7 +261,7 @@
 ;; -----------------------------------------------------------------------------
 (test-case "safety-tensor-mul-mismatch"
   (define A (make-tensor '(2 2) 1.0))
-  (define B (make-tensor '(2) 1.0))
+  (define B (make-tensor '(3) 1.0))
   (check-exn exn:fail? (lambda () (tensor-mul A B)) "Should reject shape mismatch"))
 
 (test-case "safety-tensor-matmul-rank"
