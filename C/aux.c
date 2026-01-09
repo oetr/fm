@@ -41,19 +41,19 @@
 #define GENERATE_CFILL_FUNC(SUFFIX, TYPE)                                      \
   API_EXPORT void _fill_##SUFFIX(TYPE *mem, const size_t len, const TYPE real, \
                                  const TYPE imag) {                            \
-    const size_t data_size = len * sizeof(TYPE);                               \
+    const size_t data_size = len * sizeof(TYPE) * 2;                           \
     if (real == 0 && imag == 0) {                                              \
       memset(mem, 0, data_size);                                               \
       return;                                                                  \
     }                                                                          \
     if (data_size >= PARALLEL_THRESHOLD_BYTES) {                               \
-      _Pragma("omp parallel for schedule(static)") for (size_t i = 0; i < len; \
-                                                        i += 2) {              \
+      _Pragma("omp parallel for schedule(static)") for (size_t i = 0;          \
+                                                        i < len * 2; i += 2) { \
         mem[i] = real;                                                         \
         mem[i + 1] = imag;                                                     \
       }                                                                        \
     } else {                                                                   \
-      for (size_t i = 0; i < len; i += 2) {                                    \
+      for (size_t i = 0; i < len * 2; i += 2) {                                \
         mem[i] = real;                                                         \
         mem[i + 1] = imag;                                                     \
       }                                                                        \

@@ -20,11 +20,14 @@
 
   ;; alloc
   (define n-elements (for/product ([s shape]) s))
-  (when (or (symbol=? type 'cfloat)
-            (symbol=? type 'cdouble))
-    (set! n-elements (* n-elements 2)))
 
-  (define data (alloc-tensor n-elements #:type _type))
+  (define alloc-elements
+    (if (or (symbol=? type 'cfloat)
+            (symbol=? type 'cdouble))
+        (* n-elements 2)
+        n-elements))
+
+  (define data (alloc-tensor alloc-elements #:type _type))
   (tensor-fill-data! data type n-elements fill)
 
   (define strides (shape->strides shape))
