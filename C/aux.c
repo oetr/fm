@@ -212,6 +212,15 @@ static inline void get_broadcast_offsets(size_t outer_index, int ndim,
   }
 }
 
+static inline void get_broadcast_coords(size_t index, int ndim,
+                                        const int64_t *restrict shape,
+                                        int64_t *restrict coords) {
+  for (int d = ndim - 2; d >= 0; d--) {
+    coords[d] = index % shape[d];
+    index /= shape[d];
+  }
+}
+
 /* * Macro to generate generic Broadcast Add Kernels
  * Supports:
  * - Arbitrary Ranks
@@ -280,7 +289,6 @@ GENERATE_BROADCAST_ADD_FUNC(int32, int32_t)
 GENERATE_BROADCAST_ADD_FUNC(uint64, uint64_t)
 GENERATE_BROADCAST_ADD_FUNC(int64, int64_t)
 
-
 /* * Macro to generate generic Broadcast Mul Kernels
  * Identical to Add, but with multiplication.
  */
@@ -290,9 +298,10 @@ GENERATE_BROADCAST_ADD_FUNC(int64, int64_t)
       const TYPE *__restrict A_data, const int64_t *__restrict A_strides,      \
       const TYPE *__restrict B_data, const int64_t *__restrict B_strides,      \
       TYPE *__restrict out_data) {                                             \
-                                                                               \
     if (ndim == 0)                                                             \
       return;                                                                  \
+                                                                               \
+    /* Dimensions setup */                                                     \
     size_t inner_len = shape[ndim - 1];                                        \
     size_t outer_len = 1;                                                      \
     for (int i = 0; i < ndim - 1; i++)                                         \
@@ -301,34 +310,63 @@ GENERATE_BROADCAST_ADD_FUNC(int64, int64_t)
     int64_t stride_A_inner = A_strides[ndim - 1];                              \
     int64_t stride_B_inner = B_strides[ndim - 1];                              \
                                                                                \
-    size_t total_bytes = outer_len * inner_len * sizeof(TYPE);                 \
+    /* OMP Parallel Region: We manage the loop bounds manually */              \
+    _Pragma("omp parallel") {                                                  \
+      /* A. Calculate Chunk per Thread */                                      \
+      int thread_id = omp_get_thread_num();                                    \
+      int num_threads = omp_get_num_threads();                                 \
+      size_t chunk_size = (outer_len + num_threads - 1) / num_threads;         \
+      size_t start = thread_id * chunk_size;                                   \
+      size_t end = start + chunk_size;                                         \
+      if (end > outer_len)                                                     \
+        end = outer_len;                                                       \
                                                                                \
-    if (total_bytes >= PARALLEL_THRESHOLD_BYTES) {                             \
-      _Pragma("omp parallel for schedule(static)") for (size_t i = 0;          \
-                                                        i < outer_len; i++) {  \
-        int64_t offA, offB;                                                    \
-        get_broadcast_offsets(i, ndim, shape, A_strides, B_strides, &offA,     \
-                              &offB);                                          \
+      if (start < end) {                                                       \
+        /* B. Stack-allocated coords to track state */                         \
+        /* Max dims 32 is standard safe limit, or malloc if dynamic */         \
+        int64_t coords[32];                                                    \
+        int64_t offA = 0, offB = 0;                                            \
                                                                                \
-        _Pragma("omp simd") for (size_t j = 0; j < inner_len; j++) {           \
-          out_data[i * inner_len + j] = A_data[offA + j * stride_A_inner] *    \
-                                        B_data[offB + j * stride_B_inner];     \
+        /* C. EXPENSIVE INIT: Run only ONCE per thread */                      \
+        get_broadcast_coords(start, ndim, shape, coords);                      \
+                                                                               \
+        /* Calculate initial offsets based on coords */                        \
+        for (int d = 0; d < ndim - 1; d++) {                                   \
+          offA += coords[d] * A_strides[d];                                    \
+          offB += coords[d] * B_strides[d];                                    \
         }                                                                      \
-      }                                                                        \
-    } else {                                                                   \
-      for (size_t i = 0; i < outer_len; i++) {                                 \
-        int64_t offA, offB;                                                    \
-        get_broadcast_offsets(i, ndim, shape, A_strides, B_strides, &offA,     \
-                              &offB);                                          \
                                                                                \
-        _Pragma("omp simd") for (size_t j = 0; j < inner_len; j++) {           \
-          out_data[i * inner_len + j] = A_data[offA + j * stride_A_inner] *    \
-                                        B_data[offB + j * stride_B_inner];     \
+        /* D. MAIN LOOP: "The Odometer" - No division, only addition */        \
+        for (size_t i = start; i < end; i++) {                                 \
+                                                                               \
+          /* 1. Compute Inner Loop (SIMD) */                                   \
+          _Pragma("omp simd") for (size_t j = 0; j < inner_len; j++) {         \
+            out_data[i * inner_len + j] = A_data[offA + j * stride_A_inner] *  \
+                                          B_data[offB + j * stride_B_inner];   \
+          }                                                                    \
+                                                                               \
+          /* 2. Increment Coords & Offsets (Cheap!) */                         \
+          /* We carry the one up the dimensions */                             \
+          for (int d = ndim - 2; d >= 0; d--) {                                \
+            coords[d]++;                                                       \
+            /* Did we overflow this dimension? */                              \
+            if (coords[d] < shape[d]) {                                        \
+              /* No overflow: Add stride and continue working */               \
+              offA += A_strides[d];                                            \
+              offB += B_strides[d];                                            \
+              break;                                                           \
+            } else {                                                           \
+              /* Overflow: Reset to 0, subtract full stride, carry over */     \
+              coords[d] = 0;                                                   \
+              /* We subtract (dim-1)*stride to "rewind" the pointer */         \
+              offA -= A_strides[d] * (shape[d] - 1);                           \
+              offB -= B_strides[d] * (shape[d] - 1);                           \
+            }                                                                  \
+          }                                                                    \
         }                                                                      \
       }                                                                        \
     }                                                                          \
   }
-
 GENERATE_BROADCAST_MUL_FUNC(double, double)
 GENERATE_BROADCAST_MUL_FUNC(float, float)
 GENERATE_BROADCAST_MUL_FUNC(uint8, uint8_t)
