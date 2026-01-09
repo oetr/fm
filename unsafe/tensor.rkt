@@ -12,7 +12,7 @@
   (define data  (tensor-data A))
   (define grad  (tensor-grad A))
   (define _type (symbol->type type))
-  
+
   (define (dim-width->lof-indices data dim-width offset (lookup? #f))
     (define start-addresses (if (< dim-width 10)
                                 (range dim-width)
@@ -30,7 +30,7 @@
                            [imag (ptr-ref data _type (+ (* address 2) 1))])
                        (+ real (* imag 0+1i)))
                      (ptr-ref data _type address)))])))
-  
+
 
   (define (assemble-indices data shape offset)
     (cond [(empty? shape) empty]

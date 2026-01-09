@@ -14,7 +14,7 @@
   (define B (tensor-tanh A))
   ;; tanh(0) = 0
   (check-= (ptr-ref (tensor-data B) _double 0) 0.0 1e-5)
-  
+
   (backward! B)
   ;; d/dx tanh(x) at 0 = 1 - 0^2 = 1
   (check-= (ptr-ref (tensor-grad A) _double 0) 1.0 1e-5))
@@ -23,7 +23,7 @@
   (define A (make-tensor (list 2 2) 1.0 #:type 'double))
   (define B (make-tensor (list 2) 2.0 #:type 'double)) ;; Vector of 2s
   (tensor-requires-grad! A B)
-  
+
   ;; C = A + B (broadcast)
   ;; [[1,1],[1,1]] + [2,2] -> [[3,3],[3,3]]
   (define C (tensor-add A B))
@@ -32,14 +32,14 @@
   (check-= (ptr-ref data _double 1) 3.0 1e-5)
   (check-= (ptr-ref data _double 2) 3.0 1e-5)
   (check-= (ptr-ref data _double 3) 3.0 1e-5)
-  
+
   (backward! C)
   ;; dC/dA = 1. dC/dB = sum_rows(1) = 2 (since A has 2 rows)
   ;; Grad C is filled with 1.0 by default in backward!
-  
+
   ;; Grad A should be 1.0
   (check-= (ptr-ref (tensor-grad A) _double 0) 1.0 1e-5)
-  
+
   ;; Grad B should be 2.0 (sum of gradients from both rows)
   (check-= (ptr-ref (tensor-grad B) _double 0) 2.0 1e-5)
   (check-= (ptr-ref (tensor-grad B) _double 1) 2.0 1e-5))
@@ -51,17 +51,17 @@
   (define A (make-tensor '(2 2) 2.0 #:type 'double))
   (define B (make-tensor '(2 1) 3.0 #:type 'double))
   (tensor-requires-grad! A B)
-  
+
   (define C (tensor-mul A B))
   ;; C should be all 6.0
   (check-= (ptr-ref (tensor-data C) _double 0) 6.0 1e-5)
   (check-= (ptr-ref (tensor-data C) _double 3) 6.0 1e-5)
-  
+
   (backward! C)
-  
+
   ;; dC/dA = B (broadcasted) -> (2, 2) full of 3.0s
   (check-= (ptr-ref (tensor-grad A) _double 0) 3.0 1e-5)
-  
+
   ;; dC/dB = sum(dC/dC * A) along axis 1
   ;;       = sum(1 * A)
   ;;       = sum([2, 2]) = 4.0 for each row
@@ -80,13 +80,13 @@
 (test-case "tensor-matmul"
   (define A (make-tensor '(2 3) 1.0 #:type 'double)) ;; 2x3 matrix of 1s
   (define B (make-tensor '(3 2) 2.0 #:type 'double)) ;; 3x2 matrix of 2s
-  
+
   ;; C = A * B -> (2x3) * (3x2) -> (2x2)
   ;; each element C_ij = sum(A_ik * B_kj) = sum(1.0 * 2.0) for k=0..2 = 2.0 * 3 = 6.0
   (define C (tensor-matmul A B))
-  
+
   (check-equal? (tensor-shape C) '(2 2))
-  
+
   ;; Check values
   (define data (tensor-data C))
   (check-= (ptr-ref data _double 0) 6.0 1e-5)
@@ -102,27 +102,27 @@
   ;; y = x * x
   ;; dy/dx = 2 * x
   ;; Let x = 3.0. dy/dx should be 6.0.
-  
+
   (define x (make-tensor '(1) 3.0 #:type 'double))
   (tensor-requires-grad! x)
-  
+
   (define y (tensor-mul x x))
-  
+
   (backward! y)
-  
+
   (check-= (ptr-ref (tensor-grad x) _double 0) 6.0 1e-5))
 
 (test-case "gradient-accumulation-add-self"
   ;; y = x + x
   ;; dy/dx = 2
-  
+
   (define x (make-tensor '(1) 10.0 #:type 'double))
   (tensor-requires-grad! x)
-  
+
   (define y (tensor-add x x))
-  
+
   (backward! y)
-  
+
   (check-= (ptr-ref (tensor-grad x) _double 0) 2.0 1e-5))
 
 (test-case "gradient-accumulation-split-path"
@@ -136,16 +136,16 @@
   ;;       = 4.0 + (1 - 0.92934993)
   ;;       = 4.0 + 0.07065007
   ;;       = 4.07065007
-  
+
   (define x (make-tensor '(1) 2.0 #:type 'double))
   (tensor-requires-grad! x)
-  
+
   (define a (tensor-mul x x))
   (define b (tensor-tanh x))
   (define y (tensor-add a b))
-  
+
   (backward! y)
-  
+
   (define expected (+ 4.0 (- 1.0 (expt (tanh 2.0) 2))))
   (check-= (ptr-ref (tensor-grad x) _double 0) expected 1e-5))
 
@@ -158,19 +158,19 @@
   ;; a = 2 * x
   ;; b = 3 * x
   ;; y = a + b
-  
+
   (define x (make-tensor '(1) 2.0 #:type 'double))
   (tensor-requires-grad! x)
-  
+
   (define two (make-tensor '(1) 2.0 #:type 'double))
   (define three (make-tensor '(1) 3.0 #:type 'double))
-  
+
   (define a (tensor-mul x two))
   (define b (tensor-mul x three))
   (define y (tensor-add a b))
-  
+
   (backward! y)
-  
+
   ;; dy/dx = 2 + 3 = 5
   (check-= (ptr-ref (tensor-grad x) _double 0) 5.0 1e-5))
 
@@ -179,16 +179,16 @@
   ;; b: (2) all 0
   ;; y = (x + b) + b
   ;; dy/db ?
-  
+
   (define x (make-tensor '(2 2) 0.0 #:type 'double))
   (define b (make-tensor '(2) 0.0 #:type 'double))
   (tensor-requires-grad! x b)
-  
+
   (define z (tensor-add x b))
   (define y (tensor-add z b))
-  
+
   (backward! y)
-  
+
   ;; b has shape (2).
   ;; The gradient should be accumulated from two paths.
   ;; path 1: y -> z -> b. dz/db involves reduction of 1s along axis 0.
@@ -198,7 +198,7 @@
   ;; path 2: y -> b. dy/db (direct) involves reduction of 1s along axis 0.
   ;;         Sum is 2.
   ;; Total grad for each element of b should be 4.
-  
+
   (check-= (ptr-ref (tensor-grad b) _double 0) 4.0 1e-5)
   (check-= (ptr-ref (tensor-grad b) _double 1) 4.0 1e-5))
 
@@ -208,22 +208,22 @@
   ;; C = A + B (B broadcasted along axis 0)
   ;; D = C + B (Using B again)
   ;; D = A + 2B
-  
+
   (define A (make-tensor '(2 3 4) 0.0 #:type 'double))
   (define B (make-tensor '(3 4) 0.0 #:type 'double))
   (tensor-requires-grad! A B)
-  
+
   (define C (tensor-add A B))
   (define D (tensor-add C B))
-  
+
   (backward! D)
-  
+
   ;; D has shape (2, 3, 4). Gradient of D is all 1s.
   ;; D = A + 2*B.
   ;; B is broadcast along axis 0 (size 2).
   ;; dD/dB = 2 * (sum over axis 0 of dD/dD)
   ;;       = 2 * 2 * 1.0 = 4.0.
-  
+
   ;; Let's check a few indices.
   (define grad-B (tensor-grad B))
   (for* ([i 3] [j 4])
@@ -235,22 +235,22 @@
   ;; B: (1, 2, 3, 1)
   ;; D = A + B + B
   ;; B is broadcast along axis 0 (size 2) and axis 3 (size 2).
-  
+
   (define A (make-tensor '(2 2 3 2) 0.0 #:type 'double))
   (define B (make-tensor '(1 2 3 1) 0.0 #:type 'double))
   (tensor-requires-grad! A B)
-  
+
   (define C (tensor-add A B))
   (define D (tensor-add C B))
-  
+
   (backward! D)
-  
+
   ;; D has shape (2, 2, 3, 2). Gradient is all 1s.
   ;; B is used twice.
   ;; Each usage involves broadcasting 1->2 on axis 0 and 1->2 on axis 3.
   ;; Multiplier per usage = 2 * 2 = 4.
   ;; Total gradient = 2 * 4 = 8.
-  
+
   (define grad-B (tensor-grad B))
   ;; B has 6 elements (1*2*3*1)
   (for ([i (in-range 6)])
@@ -276,20 +276,20 @@
   (define A (make-tensor '(2 1 3 1) 2.0 #:type 'double))
   (define B (make-tensor '(1 2 1 3) 3.0 #:type 'double))
   (tensor-requires-grad! A B)
-  
+
   (define C (tensor-mul A B))
-  
+
   (check-equal? (tensor-shape C) '(2 2 3 3))
   (check-= (ptr-ref (tensor-data C) _double 0) 6.0 1e-5)
   (check-= (ptr-ref (tensor-data C) _double 35) 6.0 1e-5)
-  
+
   (backward! C)
-  
+
   ;; Grad A: Sum of (1.0 * 3.0) over broadcast axes of A (axis 1 size 2, axis 3 size 3)
   ;; Factor = 2 * 3 = 6.
   ;; Val = 3.0 * 6 = 18.0
   (check-= (ptr-ref (tensor-grad A) _double 0) 18.0 1e-5)
-  
+
   ;; Grad B: Sum of (1.0 * 2.0) over broadcast axes of B (axis 0 size 2, axis 2 size 3)
   ;; Factor = 2 * 3 = 6.
   ;; Val = 2.0 * 6 = 12.0
@@ -356,12 +356,12 @@
   (define A (make-tensor '(2) 2.0 #:type 'float))
   (define B (make-tensor '(2) 3.0 #:type 'float))
   (tensor-requires-grad! A B)
-  
+
   ;; Mul
   (define C (tensor-mul A B)) ;; [6.0, 6.0]
   (check-equal? (tensor-type C) 'float)
   (check-= (ptr-ref (tensor-data C) _float 0) 6.0 1e-4)
-  
+
   (backward! C)
   ;; dC/dA = B = 3.0
   (check-= (ptr-ref (tensor-grad A) _float 0) 3.0 1e-4))
@@ -373,10 +373,10 @@
   (define A (make-tensor '(2 2) 1.0 #:type 'double))
   (define s (make-tensor '(1) 5.0 #:type 'double))
   (tensor-requires-grad! s)
-  
+
   (define C (tensor-add A s)) ;; All 6.0
   (backward! C)
-  
+
   ;; dC/ds = sum(dC/dC) = sum(ones(2,2)) = 4.0
   (check-= (ptr-ref (tensor-grad s) _double 0) 4.0 1e-5))
 
@@ -386,10 +386,10 @@
   (define A (make-tensor '(2 1 2) 1.0 #:type 'double))
   (define B (make-tensor '(2 2 2) 2.0 #:type 'double))
   (tensor-requires-grad! A)
-  
+
   (define C (tensor-add A B))
   (backward! C)
-  
+
   ;; Gradient for A should sum over the middle dimension (size 2)
   ;; A has size 4. C has size 8.
   ;; Each element of A broadcasts to 2 elements in C.
@@ -399,7 +399,7 @@
   ;; (3, 1) @ (1, 3) -> (3, 3)
   (define A (make-tensor '(3 1) 1.0 #:type 'double))
   (define B (make-tensor '(1 3) 2.0 #:type 'double))
-  
+
   (define C (tensor-matmul A B))
   (check-equal? (tensor-shape C) '(3 3))
   ;; Result should be all 2.0
@@ -409,7 +409,7 @@
   ;; (1, 3) @ (3, 1) -> (1, 1)
   (define A (make-tensor '(1 3) 1.0 #:type 'double))
   (define B (make-tensor '(3 1) 2.0 #:type 'double))
-  
+
   (define C (tensor-matmul A B))
   (check-equal? (tensor-shape C) '(1 1))
   ;; Dot product: 1*2 + 1*2 + 1*2 = 6.0
@@ -423,31 +423,31 @@
   ;; W: (2, 2) = 0.5
   ;; x: (2, 1) = 1.0
   ;; b: (2, 1) = 0.5
-  
+
   (define W (make-tensor '(2 2) 0.5 #:type 'double))
   (define x (make-tensor '(2 1) 1.0 #:type 'double))
   (define b (make-tensor '(2 1) 0.5 #:type 'double))
   (tensor-requires-grad! W b)
-  
+
   ;; z = Wx + b
   ;; Wx = [[0.5, 0.5], [0.5, 0.5]] @ [[1], [1]] = [[1.0], [1.0]]
   ;; z = [[1.0], [1.0]] + [[0.5], [0.5]] = [[1.5], [1.5]]
   (define z (tensor-add (tensor-matmul W x) b))
-  
+
   ;; a = tanh(z)
   ;; tanh(1.5) ~= 0.905148
   (define a (tensor-tanh z))
-  
+
   (check-= (ptr-ref (tensor-data a) _double 0) 0.905148 1e-5)
   (check-= (ptr-ref (tensor-data a) _double 1) 0.905148 1e-5)
-  
+
   (backward! a)
-  
+
   ;; Gradient check
   ;; da/dz = 1 - tanh^2(z) = 1 - 0.905148^2 ~= 1 - 0.81929 = 0.18071
   ;; da/db = da/dz * dz/db = da/dz * 1
   (check-= (ptr-ref (tensor-grad b) _double 0) 0.18071 1e-4)
-  
+
   ;; da/dW = da/dz * dz/dW = da/dz * x^T
   ;; dz/dW is outer product of da/dz vector and x vector
   ;; 0.18071 * 1.0 = 0.18071

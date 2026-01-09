@@ -4,8 +4,8 @@
 
 (require ffi/unsafe
          ffi/unsafe/define
-         (for-syntax racket/base   
-                     racket/syntax 
+         (for-syntax racket/base
+                     racket/syntax
                      syntax/parse))
 
 (define cblas-lib (ffi-lib "libblas" #:fail (λ () #f)))
@@ -20,13 +20,13 @@
       [(c)  #'_float]
       [(z)  #'_double]
       [else (error "Unknown BLAS prefix: " p)]))
-  
+
   (define (prefix->types p)
-    
+
     (define (syntax->symbols syntx)
       (for/list ([c (symbol->string (syntax->datum syntx))])
         (string->symbol (string c))))
-    
+
     (define prefix (syntax->symbols p))
     (when (> (length prefix) 2)
       (error "BLAS prefix cannot have more than 2 types: " (syntax->datum p)))
@@ -148,11 +148,11 @@
            ffi/cvector)
 
   ;; --- Helpers for Memory Management ---
-  
+
   ;; Allocate a C float array from a Racket list
   (define (f32-vector . args)
     (list->cvector args _float))
-  
+
   ;; Allocate a C double array from a Racket list
   (define (f64-vector . args)
     (list->cvector args _double))
@@ -181,9 +181,9 @@
     ;; Vector: [3+4i, 0.0+0.0i]. Result: |3| + |4| = 7.0
     (define sc-vec (f32-vector 3.0 4.0 0.0 0.0))
     (check-= (cblas_scasum 2 (cvector-ptr sc-vec) 1) 7.0 0.001)
-    
+
     ;; dzasum: Complex double input
-    (define dz-vec (f64-vector 3.0 4.0)) 
+    (define dz-vec (f64-vector 3.0 4.0))
     (check-= (cblas_dzasum 1 (cvector-ptr dz-vec) 1) 7.0 0.001))
 
   (test-case "AXPY: Y = alpha*X + Y"

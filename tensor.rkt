@@ -31,7 +31,7 @@
   (tensor-fill-data! data type n-elements fill)
 
   (define strides (shape->strides shape))
-  
+
   (tensor void children data empty n-elements shape strides type))
 
 
@@ -95,7 +95,7 @@
       (for ([child (tensor-children T)])
         (build-topo! child))
       (set! topo (cons T topo))))
-  
+
   (tensor-requires-grad! T)
   (build-topo! T)
   (tensor-grad-fill T 1.0)
@@ -110,18 +110,18 @@
   (define rank-A (length shape-A))
   (define rank-B (length shape-B))
   (define max-rank (max rank-A rank-B))
-  
+
   (define pad-A (make-list (- max-rank rank-A) 1))
   (define pad-B (make-list (- max-rank rank-B) 1))
-  
+
   ;; padded shapes
   (define sA (append pad-A shape-A))
   (define sB (append pad-B shape-B))
-  
+
   ;; padded strides (stride for a padded '1' dimension is mathematically irrelevant, use 0)
   (define stA (append (make-list (- max-rank rank-A) 0) strides-A))
   (define stB (append (make-list (- max-rank rank-B) 0) strides-B))
-  
+
   ;; 2. Unify dimensions
   (define-values (out-shape new-stA new-stB)
     (for/lists (dims stAs stBs)
@@ -140,7 +140,7 @@
          (values dimA strideA 0)]
         [else
          (error 'broadcast "Incompatible shapes: ~a and ~a" shape-A shape-B)])))
-  
+
   (values out-shape new-stA new-stB))
 
 (define (broadcast-compatible? shape-A shape-B)
@@ -178,8 +178,9 @@
      ;; 2. Categorize Dimensions into KEEP vs REDUCE
      (define-values (keep-shape keep-src-st keep-dst-st
                                 reduce-shape reduce-src-st)
-       (for/fold ([ks '()] [kss '()] [kds '()]
-                           [rs '()] [rss '()])
+       (for/fold ([ks '()]
+                  [kss '()] [kds '()]
+                  [rs '()]  [rss '()])
                  ([d-in  (in-list padded-in-shape)]
                   [d-out (in-list out-shape)]
                   [st-out (in-list (tensor-strides out))]
@@ -213,12 +214,12 @@
 (define+provide (tensor-add A B)
   (define type-A (tensor-type A))
   (define type-B (tensor-type B))
-  
+
   ;; check supported types
   (unless (symbol=? type-A type-B)
     (error 'tensor-add "both tensors should be of the same type, but were: ~a and ~a~n" type-A type-B))
-  
-  
+
+
   (define shape-A (tensor-shape A))
   (define shape-B (tensor-shape B))
   (define strides-A (tensor-strides A))
@@ -227,9 +228,9 @@
   ;; Calculate broadcast shapes and strides
   (define-values (out-shape broadcast-strides-A broadcast-strides-B)
     (broadcast-structs shape-A strides-A shape-B strides-B))
-  
+
   (define out (make-tensor out-shape #:type type-A #:children (list A B)))
-  
+
   (define A-grad? (not (empty? (tensor-grad A))))
   (define B-grad? (not (empty? (tensor-grad B))))
   (define grad? (or A-grad? B-grad?))
@@ -352,7 +353,7 @@
   ;; check supported types
   (unless (symbol=? type-A type-B)
     (error 'tensor-mul "both tensors should be of the same type, but were: ~a and ~a~n" type-A type-B))
-  
+
   (unless (or (symbol=? type-A 'double) (symbol=? type-A 'float))
     (raise-argument-error 'tensor-mul "tensor:double or tensor:float" 0 A B))
   (unless (or (symbol=? type-B 'double) (symbol=? type-B 'float))
@@ -389,16 +390,16 @@
           (tensor-data B)
           broadcast-strides-B
           (tensor-data out)))
-  
+
   (define (backward)
     ;; Helper to accumulate gradients properly when broadcasting occurs.
     ;; For mult: dA += (dC * B) reduced to A shape
     ;;           dB += (dC * A) reduced to B shape
-    
+
     (define (accumulate-grad-mul! input-tensor other-tensor grad-out broadcast-strides-input broadcast-strides-other)
       (define in-shape (tensor-shape input-tensor))
       (define out-shape (tensor-shape out))
-    
+
       (cond
         ;; Optimization: Simple 1:1 match
         [(equal? in-shape out-shape)
@@ -417,32 +418,32 @@
          ;; We must instantiate it.
          ;; TODO: We could write a fused kernel "_mul_broadcast_reduce" to avoid this alloc.
          ;; For now, allocate temp.
-         
+
          (define temp-grad (alloc-tensor (tensor-length out) #:type (symbol->type type-A)))
-         
+
          ;; Compute temp = grad_out * other_data (broadcasted)
          ;; grad_out is contiguous (standard strides for out-shape).
          ;; other_data might be broadcasted (use broadcast-strides-other).
          (let-typed-c type-A
-            ([mul! _mul_broadcast])
-            (mul! ndim
-                  out-shape
-                  grad-out
-                  (shape->strides out-shape) ;; grad_out is contiguous
-                  (tensor-data other-tensor)
-                  broadcast-strides-other
-                  temp-grad))
-         
+           ([mul! _mul_broadcast])
+           (mul! ndim
+                 out-shape
+                 grad-out
+                 (shape->strides out-shape) ;; grad_out is contiguous
+                 (tensor-data other-tensor)
+                 broadcast-strides-other
+                 temp-grad))
+
          ;; 2. Reduce temp-grad into input-tensor.grad
          ;; This is identical logic to tensor-add's reduction
          (define rank-out (length out-shape))
          (define pad-len  (- rank-out (length in-shape)))
          (define padded-in-shape (append (make-list pad-len 1) in-shape))
-         
+
          (define-values (keep-shape keep-src-st keep-dst-st
-                         reduce-shape reduce-src-st)
+                                    reduce-shape reduce-src-st)
            (for/fold ([ks '()] [kss '()] [kds '()]
-                      [rs '()] [rss '()])
+                               [rs '()] [rss '()])
                      ([d-in  (in-list padded-in-shape)]
                       [d-out (in-list out-shape)]
                       [st-out (in-list (shape->strides out-shape))] ;; Strides of temp-grad (standard)
@@ -452,7 +453,7 @@
                 (values ks kss kds (cons d-out rs) (cons st-out rss))]
                [else
                 (values (cons d-out ks) (cons st-out kss) (cons st-in kds) rs rss)])))
-         
+
          (let-typed-c type-A
            ([reduce! _reduce_sum_generic])
            (reduce! (length keep-shape)
@@ -464,7 +465,7 @@
                     (reverse reduce-src-st)
                     temp-grad
                     (tensor-grad input-tensor)))
-         
+
          ;; Free temp? Racket GC handles it, but explicit might be nicer if not GC pointer.
          ;; It is alloc-tensor (GC pointer), so we are good.
          ]))
@@ -479,7 +480,7 @@
 (define+provide (tensor-matmul A B)
   (define type-A (tensor-type A))
   (define type-B (tensor-type B))
-  
+
   (unless (symbol=? type-A type-B)
     (error 'tensor-matmul "tensors must have same type, got: ~a and ~a" type-A type-B))
   (unless (or (symbol=? type-A 'double) (symbol=? type-A 'float))
@@ -491,7 +492,7 @@
 
   (match-define (list M K) (tensor-shape A))
   (match-define (list K2 N) (tensor-shape B))
-  
+
   (unless (= K K2)
     (error 'tensor-matmul "shapes incompatible for matmul: ~a vs ~a" (tensor-shape A) (tensor-shape B)))
 
@@ -642,6 +643,6 @@
                (lambda ()
                  (broadcast-structs '(2) '(1)
                                     '(3) '(1)))))
-)
+  )
 
 
