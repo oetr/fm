@@ -269,6 +269,81 @@
   (define B (make-tensor '(2 2) 1.0))
   (check-exn exn:fail? (lambda () (tensor-matmul A B)) "Should reject 3D tensor"))
 
+(test-case "tensor-mul-broadcast-4d"
+  ;; A: (2, 1, 3, 1)
+  ;; B: (1, 2, 1, 3)
+  ;; Out: (2, 2, 3, 3)
+  (define A (make-tensor '(2 1 3 1) 2.0 #:type 'double))
+  (define B (make-tensor '(1 2 1 3) 3.0 #:type 'double))
+  (tensor-requires-grad! A B)
+  
+  (define C (tensor-mul A B))
+  
+  (check-equal? (tensor-shape C) '(2 2 3 3))
+  (check-= (ptr-ref (tensor-data C) _double 0) 6.0 1e-5)
+  (check-= (ptr-ref (tensor-data C) _double 35) 6.0 1e-5)
+  
+  (backward! C)
+  
+  ;; Grad A: Sum of (1.0 * 3.0) over broadcast axes of A (axis 1 size 2, axis 3 size 3)
+  ;; Factor = 2 * 3 = 6.
+  ;; Val = 3.0 * 6 = 18.0
+  (check-= (ptr-ref (tensor-grad A) _double 0) 18.0 1e-5)
+  
+  ;; Grad B: Sum of (1.0 * 2.0) over broadcast axes of B (axis 0 size 2, axis 2 size 3)
+  ;; Factor = 2 * 3 = 6.
+  ;; Val = 2.0 * 6 = 12.0
+  (check-= (ptr-ref (tensor-grad B) _double 0) 12.0 1e-5))
+
+(test-case "tensor-mul-broadcast-5d"
+  ;; A: (2, 1, 2, 1, 2)
+  ;; B: (1, 2, 1, 2, 1)
+  ;; Out: (2, 2, 2, 2, 2) -> 32 elements
+  (define A (make-tensor '(2 1 2 1 2) 2.0 #:type 'double))
+  (define B (make-tensor '(1 2 1 2 1) 4.0 #:type 'double))
+  (tensor-requires-grad! A B)
+
+  (define C (tensor-mul A B))
+  (check-equal? (tensor-shape C) '(2 2 2 2 2))
+  (check-= (ptr-ref (tensor-data C) _double 0) 8.0 1e-5)
+  (check-= (ptr-ref (tensor-data C) _double 31) 8.0 1e-5)
+
+  (backward! C)
+
+  ;; Grad A: broadcasts on axes 1 (size 2) and 3 (size 2). Total factor 4.
+  ;; Gradient from C is 1.0 (implicit).
+  ;; dC/dA contribution = B * 1.0.
+  ;; Sum(B) over axes 1,3? No, A is smaller.
+  ;; dA += sum(dC * B) over broadcast axes.
+  ;; B is 4.0. dC is 1.0. Product is 4.0.
+  ;; Summing 4.0 over 4 broadcasted slots = 16.0.
+  (check-= (ptr-ref (tensor-grad A) _double 0) 16.0 1e-5)
+
+  ;; Grad B: broadcasts on axes 0 (size 2), 2 (size 2), 4 (size 2). Total factor 8.
+  ;; A is 2.0. dC is 1.0. Product is 2.0.
+  ;; Summing 2.0 over 8 broadcasted slots = 16.0.
+  (check-= (ptr-ref (tensor-grad B) _double 0) 16.0 1e-5))
+
+(test-case "tensor-mul-broadcast-mixed-rank-5d"
+  ;; A: (2, 2, 2, 2, 2)
+  ;; B: (2) -> broadcasts to (2, 2, 2, 2, 2)
+  (define A (make-tensor '(2 2 2 2 2) 0.5 #:type 'double))
+  (define B (make-tensor '(2) 10.0 #:type 'double))
+  (tensor-requires-grad! A B)
+
+  (define C (tensor-mul A B))
+  (check-equal? (tensor-shape C) '(2 2 2 2 2))
+  (check-= (ptr-ref (tensor-data C) _double 0) 5.0 1e-5)
+
+  (backward! C)
+
+  ;; Grad A: B is effectively scalar 10.0 per element.
+  (check-= (ptr-ref (tensor-grad A) _double 0) 10.0 1e-5)
+
+  ;; Grad B: A is 0.5. Sum over 2*2*2*2 = 16 elements.
+  ;; 16 * 0.5 = 8.0.
+  (check-= (ptr-ref (tensor-grad B) _double 0) 8.0 1e-5))
+
 (test-case "safety-type-mixing"
   (define A (make-tensor '(2 2) 1.0 #:type 'double))
   (define B (make-tensor '(2 2) 1.0 #:type 'float))
