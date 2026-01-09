@@ -28,7 +28,8 @@
   (tensor-fill-data! data type n-elements fill)
 
   (define strides (shape->strides shape))
-  (tensor shape strides type data empty void children))
+  
+  (tensor void children data empty n-elements shape strides type))
 
 
 (define (tensor-fill-data! data type n-elements fill)

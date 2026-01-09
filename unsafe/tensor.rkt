@@ -85,7 +85,7 @@
     [(== 'bool)       _stdbool]
     [_ (error 'symbol->type "unsupported type: ~a~n" a-symbol)]))
 
-(struct tensor (shape strides type data grad backward children)
+(struct tensor (backward children data grad length shape strides type)
   #:mutable
   #:methods gen:custom-write
   [(define write-proc
