@@ -554,3 +554,65 @@
   ;; dz/dW is outer product of da/dz vector and x vector
   ;; 0.18071 * 1.0 = 0.18071
   (check-= (ptr-ref (tensor-grad W) _double 0) 0.18071 1e-4))
+
+;; -----------------------------------------------------------------------------
+;; Extended Unary & Binary Ops Tests
+;; -----------------------------------------------------------------------------
+
+(test-case "tensor-sub-simple"
+  ;; A - B where A=5, B=3 -> 2
+  (define A (make-tensor '(1) 5.0 #:type 'double))
+  (define B (make-tensor '(1) 3.0 #:type 'double))
+  (tensor-requires-grad! A B)
+  (define C (tensor-sub A B))
+  (check-= (ptr-ref (tensor-data C) _double 0) 2.0 1e-5)
+  (backward! C)
+  (check-= (ptr-ref (tensor-grad A) _double 0) 1.0 1e-5)
+  (check-= (ptr-ref (tensor-grad B) _double 0) -1.0 1e-5))
+
+(test-case "tensor-div-simple"
+  ;; A / B where A=6, B=3 -> 2
+  (define A (make-tensor '(1) 6.0 #:type 'double))
+  (define B (make-tensor '(1) 3.0 #:type 'double))
+  (tensor-requires-grad! A B)
+  (define C (tensor-div A B))
+  (check-= (ptr-ref (tensor-data C) _double 0) 2.0 1e-5)
+  (backward! C)
+  ;; dA = 1/B = 1/3
+  (check-= (ptr-ref (tensor-grad A) _double 0) (/ 1.0 3.0) 1e-5)
+  ;; dB = -A/B^2 = -6/9 = -2/3
+  (check-= (ptr-ref (tensor-grad B) _double 0) (/ -2.0 3.0) 1e-5))
+
+(test-case "tensor-pow-simple"
+  ;; A ^ B where A=2, B=3 -> 8
+  (define A (make-tensor '(1) 2.0 #:type 'double))
+  (define B (make-tensor '(1) 3.0 #:type 'double))
+  (tensor-requires-grad! A B)
+  (define C (tensor-pow A B))
+  (check-= (ptr-ref (tensor-data C) _double 0) 8.0 1e-5)
+  (backward! C)
+  ;; dA = B * A^(B-1) = 3 * 2^2 = 12
+  (check-= (ptr-ref (tensor-grad A) _double 0) 12.0 1e-5)
+  ;; dB = A^B * ln(A) = 8 * ln(2)
+  (check-= (ptr-ref (tensor-grad B) _double 0) (* 8.0 (log 2.0)) 1e-5))
+
+(test-case "tensor-exp-simple"
+  ;; exp(A) where A=1 -> e
+  (define A (make-tensor '(1) 1.0 #:type 'double))
+  (tensor-requires-grad! A)
+  (define B (tensor-exp A))
+  (check-= (ptr-ref (tensor-data B) _double 0) (exp 1.0) 1e-5)
+  (backward! B)
+  ;; dA = exp(A) = e
+  (check-= (ptr-ref (tensor-grad A) _double 0) (exp 1.0) 1e-5))
+
+(test-case "tensor-log-simple"
+  ;; log(A) where A=e -> 1
+  (define A (make-tensor '(1) (exp 1.0) #:type 'double))
+  (tensor-requires-grad! A)
+  (define B (tensor-log A))
+  (check-= (ptr-ref (tensor-data B) _double 0) 1.0 1e-5)
+  (backward! B)
+  ;; dA = 1/A = 1/e
+  (check-= (ptr-ref (tensor-grad A) _double 0) (/ 1.0 (exp 1.0)) 1e-5))
+
