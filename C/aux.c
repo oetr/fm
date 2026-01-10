@@ -722,6 +722,66 @@ GENERATE_GENERIC_REDUCE(uint16, uint16_t)
 GENERATE_GENERIC_REDUCE(int8, int8_t)
 GENERATE_GENERIC_REDUCE(uint8, uint8_t)
 
+/* * Macro to generate generic Broadcast Mul Reduce Kernels
+ * Used for fusing multiplication and reduction in backward passes.
+ */
+#define GENERATE_MUL_BROADCAST_REDUCE(SUFFIX, TYPE)                            \
+  API_EXPORT void _mul_broadcast_reduce_sum_##SUFFIX(                          \
+      const size_t n_keep,                                                     \
+      const size_t *keep_shape,       /* Shape of parallel dimensions */       \
+      const size_t *keep_A_strides,   /* Stride in grad_out */                 \
+      const size_t *keep_B_strides,   /* Stride in other_tensor */             \
+      const size_t *keep_dst_strides, /* Stride in accumulator */              \
+      const size_t n_reduce,                                                   \
+      const size_t *reduce_shape,       /* Shape of collapsed dimensions */    \
+      const size_t *reduce_A_strides,   /* Stride in grad_out */               \
+      const size_t *reduce_B_strides,   /* Stride in other_tensor */           \
+      const TYPE *__restrict A_data,    /* grad_out */                         \
+      const TYPE *__restrict B_data,    /* other_tensor */                     \
+      TYPE *__restrict dst_data) {      /* accumulator */                      \
+                                                                               \
+    /* 1. Calculate total iterations */                                        \
+    size_t total_keep = 1;                                                     \
+    for (size_t i = 0; i < n_keep; i++)                                        \
+      total_keep *= keep_shape[i];                                             \
+                                                                               \
+    size_t total_reduce = 1;                                                   \
+    for (size_t i = 0; i < n_reduce; i++)                                      \
+      total_reduce *= reduce_shape[i];                                         \
+                                                                               \
+    /* 2. Parallel Loop over the Output (Keep Dims) */                         \
+    _Pragma("omp parallel for schedule(static)") for (size_t i = 0;            \
+                                                      i < total_keep; i++) {   \
+      /* Map linear i to offsets */                                            \
+      size_t dst_offset = get_offset(i, n_keep, keep_shape, keep_dst_strides); \
+      size_t A_base = get_offset(i, n_keep, keep_shape, keep_A_strides);       \
+      size_t B_base = get_offset(i, n_keep, keep_shape, keep_B_strides);       \
+                                                                               \
+      TYPE sum = 0;                                                            \
+                                                                               \
+      /* 3. Inner Loop over the Reduction Volume */                            \
+      for (size_t j = 0; j < total_reduce; j++) {                              \
+        size_t A_off = get_offset(j, n_reduce, reduce_shape, reduce_A_strides);\
+        size_t B_off = get_offset(j, n_reduce, reduce_shape, reduce_B_strides);\
+                                                                               \
+        sum += A_data[A_base + A_off] * B_data[B_base + B_off];                \
+      }                                                                        \
+                                                                               \
+      dst_data[dst_offset] += sum;                                             \
+    }                                                                          \
+  }
+
+GENERATE_MUL_BROADCAST_REDUCE(double, double)
+GENERATE_MUL_BROADCAST_REDUCE(float, float)
+GENERATE_MUL_BROADCAST_REDUCE(int64, int64_t)
+GENERATE_MUL_BROADCAST_REDUCE(uint64, uint64_t)
+GENERATE_MUL_BROADCAST_REDUCE(int32, int32_t)
+GENERATE_MUL_BROADCAST_REDUCE(uint32, uint32_t)
+GENERATE_MUL_BROADCAST_REDUCE(int16, int16_t)
+GENERATE_MUL_BROADCAST_REDUCE(uint16, uint16_t)
+GENERATE_MUL_BROADCAST_REDUCE(int8, int8_t)
+GENERATE_MUL_BROADCAST_REDUCE(uint8, uint8_t)
+
 /* Backward Tanh Kernel
  * Computes: grad_in += grad_out * (1 - out^2)
  * TODO: We iterate linearly. Add support for non-contiguous views/slices later.

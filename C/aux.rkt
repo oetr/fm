@@ -196,6 +196,21 @@
         (dst-data           : _gcpointer)
         -> _void))
 
+(define+provide-aux* _mul_broadcast_reduce_sum *all-types-without-complex*
+  (_fun (n-keep             : _size)
+        (keep-shape         : (_list i _size))
+        (keep-A-strides     : (_list i _size))
+        (keep-B-strides     : (_list i _size))
+        (keep-dst-strides   : (_list i _size))
+        (n-reduce           : _size)
+        (reduce-shape       : (_list i _size))
+        (reduce-A-strides   : (_list i _size))
+        (reduce-B-strides   : (_list i _size))
+        (A-data             : _gcpointer)
+        (B-data             : _gcpointer)
+        (dst-data           : _gcpointer)
+        -> _void))
+
 (define+provide-aux* _backward_tanh (_double _float)
   (_fun (out-data : _gcpointer)
         (grad-out : _gcpointer)
