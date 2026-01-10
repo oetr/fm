@@ -77,6 +77,82 @@
   (backward! D)
   (check-true (tensor? D)))
 
+(test-case "tensor-sub-broadcast"
+  (define A (make-tensor '(2 2) 3.0 #:type 'double))
+  (define B (make-tensor '(2 1) 1.0 #:type 'double))
+  (tensor-requires-grad! A B)
+
+  (define C (tensor-sub A B))
+  ;; [[3,3],[3,3]] - [[1],[1]] = [[2,2],[2,2]]
+  (check-= (ptr-ref (tensor-data C) _double 0) 2.0 1e-5)
+  (check-= (ptr-ref (tensor-data C) _double 1) 2.0 1e-5)
+
+  (backward! C)
+
+  ;; dC/dA = 1.0
+  (check-= (ptr-ref (tensor-grad A) _double 0) 1.0 1e-5)
+
+  ;; dC/dB = -1.0 (broadcast sum)
+  ;; Each element of B is subtracted from 2 elements of A.
+  ;; Sum = -1 + -1 = -2.
+  (check-= (ptr-ref (tensor-grad B) _double 0) -2.0 1e-5)
+  (check-= (ptr-ref (tensor-grad B) _double 1) -2.0 1e-5))
+
+(test-case "tensor-div-broadcast"
+  (define A (make-tensor '(2 2) 6.0 #:type 'double))
+  (define B (make-tensor '(2 1) 2.0 #:type 'double))
+  (tensor-requires-grad! A B)
+
+  (define C (tensor-div A B))
+  ;; 6 / 2 = 3
+  (check-= (ptr-ref (tensor-data C) _double 0) 3.0 1e-5)
+
+  (backward! C)
+
+  ;; dA = 1/B = 0.5
+  (check-= (ptr-ref (tensor-grad A) _double 0) 0.5 1e-5)
+
+  ;; dB = -A/B^2 = -6/4 = -1.5
+  ;; Broadcast sum: -1.5 * 2 = -3.0
+  (check-= (ptr-ref (tensor-grad B) _double 0) -3.0 1e-5))
+
+(test-case "tensor-pow-broadcast"
+  (define A (make-tensor '(2 2) 2.0 #:type 'double))
+  (define B (make-tensor '(1) 3.0 #:type 'double))
+  (tensor-requires-grad! A B)
+
+  (define C (tensor-pow A B))
+  ;; 2^3 = 8
+  (check-= (ptr-ref (tensor-data C) _double 0) 8.0 1e-5)
+
+  (backward! C)
+
+  ;; dA = B * A^(B-1) = 3 * 2^2 = 12
+  (check-= (ptr-ref (tensor-grad A) _double 0) 12.0 1e-5)
+
+  ;; dB = A^B * ln(A) = 8 * ln(2) ~= 8 * 0.693147 = 5.545
+  ;; Sum over 4 elements: 5.545 * 4 = 22.18
+  (check-= (ptr-ref (tensor-grad B) _double 0) (* 4.0 8.0 (log 2.0)) 1e-4))
+
+(test-case "tensor-exp"
+  (define A (make-tensor '(2) 0.0 #:type 'double))
+  (tensor-requires-grad! A)
+  (define B (tensor-exp A))
+  (check-= (ptr-ref (tensor-data B) _double 0) 1.0 1e-5) ;; exp(0)=1
+
+  (backward! B)
+  (check-= (ptr-ref (tensor-grad A) _double 0) 1.0 1e-5))
+
+(test-case "tensor-log"
+  (define A (make-tensor '(2) (exp 1.0) #:type 'double))
+  (tensor-requires-grad! A)
+  (define B (tensor-log A))
+  (check-= (ptr-ref (tensor-data B) _double 0) 1.0 1e-5)
+
+  (backward! B)
+  ;; d/dx log(x) = 1/x = 1/e
+  (check-= (ptr-ref (tensor-grad A) _double 0) (/ 1.0 (exp 1.0)) 1e-5))
+
 (test-case "tensor-matmul"
   (define A (make-tensor '(2 3) 1.0 #:type 'double)) ;; 2x3 matrix of 1s
   (define B (make-tensor '(3 2) 2.0 #:type 'double)) ;; 3x2 matrix of 2s
@@ -94,6 +170,32 @@
   (check-= (ptr-ref data _double 2) 6.0 1e-5)
   (check-= (ptr-ref data _double 3) 6.0 1e-5)
   )
+
+(test-case "tensor-add-out!"
+  (define A (make-tensor '(2) 1.0 #:type 'double))
+  (define B (make-tensor '(2) 2.0 #:type 'double))
+  (define out (make-tensor '(2) 0.0 #:type 'double))
+  (tensor-requires-grad! A B out)
+
+  (tensor-add-out! out A B)
+  (check-= (ptr-ref (tensor-data out) _double 0) 3.0 1e-5)
+
+  (backward! out)
+  (check-= (ptr-ref (tensor-grad A) _double 0) 1.0 1e-5)
+  (check-= (ptr-ref (tensor-grad B) _double 0) 1.0 1e-5))
+
+(test-case "tensor-mul-out!"
+  (define A (make-tensor '(2) 2.0 #:type 'double))
+  (define B (make-tensor '(2) 3.0 #:type 'double))
+  (define out (make-tensor '(2) 0.0 #:type 'double))
+  (tensor-requires-grad! A B out)
+
+  (tensor-mul-out! out A B)
+  (check-= (ptr-ref (tensor-data out) _double 0) 6.0 1e-5)
+
+  (backward! out)
+  (check-= (ptr-ref (tensor-grad A) _double 0) 3.0 1e-5)
+  (check-= (ptr-ref (tensor-grad B) _double 0) 2.0 1e-5))
 
 ;; -----------------------------------------------------------------------------
 ;; Gradient Accumulation & Broadcasting

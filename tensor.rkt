@@ -211,6 +211,428 @@
                 (tensor-grad input-tensor) ;; Dest (Small)
                 ))]))
 
+(define+provide (tensor-sub A B)
+  (define type-A (tensor-type A))
+  (define type-B (tensor-type B))
+
+  (unless (symbol=? type-A type-B)
+    (error 'tensor-sub "both tensors should be of the same type, but were: ~a and ~a~n" type-A type-B))
+
+  (define shape-A (tensor-shape A))
+  (define shape-B (tensor-shape B))
+  (define strides-A (tensor-strides A))
+  (define strides-B (tensor-strides B))
+
+  (define-values (out-shape broadcast-strides-A broadcast-strides-B)
+    (broadcast-structs shape-A strides-A shape-B strides-B))
+
+  (define out (make-tensor out-shape #:type type-A #:children (list A B)))
+
+  (define A-grad? (not (empty? (tensor-grad A))))
+  (define B-grad? (not (empty? (tensor-grad B))))
+  (define grad? (or A-grad? B-grad?))
+
+  (when grad?
+    (unless (or (symbol=? type-A 'double) (symbol=? type-A 'float))
+      (raise-argument-error 'tensor-sub "tensor:double or tensor:float" 0 A B))
+    (unless (or (symbol=? type-B 'double) (symbol=? type-B 'float))
+      (raise-argument-error 'tensor-sub "tensor:double or tensor:float" 1 A B))
+    (tensor-requires-grad! out)
+    (tensor-requires-grad! A)
+    (tensor-requires-grad! B))
+
+  (let-typed-c type-A
+    ([sub! _sub_broadcast])
+    (sub! (length out-shape)
+          out-shape
+          (tensor-data A)
+          broadcast-strides-A
+          (tensor-data B)
+          broadcast-strides-B
+          (tensor-data out)))
+
+  (define (backward)
+    (accumulate-grad! A out)
+    ;; For B, we accumulate -1 * grad_out
+    ;; We can create a temporary view or negative gradient?
+    ;; Or use a weighted accumulation.
+    ;; Current accumulate-grad! is hardcoded to +1.0 axpy/reduce.
+    ;; We need to subtract.
+    ;; Let's multiply grad_out by -1 temporarily? No, that modifies shared state.
+    ;;
+    ;; Better: tensor-grad-fill with -1? No.
+    ;;
+    ;; Let's implement accumulation with a scalar multiplier in accumulate-grad!.
+    ;; But accumulate-grad! uses _reduce_sum_generic which is raw sum.
+    ;;
+    ;; Quick fix: Scale tensor-grad(out) by -1, accumulate to B, then scale back.
+    ;; This is safe because backward passes are sequential in our engine (for now).
+    ;; Wait, if `out` is used multiple times, we can't mutate its grad like that.
+    ;;
+    ;; Correct approach:
+    ;; dA += dC
+    ;; dB += -dC
+    ;;
+    ;; We can make a negative view of dC?
+    ;; Or just write a explicit "accumulate-sub-grad!"
+    (accumulate-grad-negative! B out))
+
+  (when grad?
+    (set-tensor-backward! out backward))
+  out)
+
+(define (accumulate-grad-negative! input-tensor out)
+  ;; This is accumulate-grad! but with a negative sign during accumulation.
+  ;; We can reuse the logic but need a negative-adding kernel.
+  ;;
+  ;; Strategy:
+  ;; 1. Alloc temp = -1 * grad(out)
+  ;; 2. Accumulate temp into grad(input)
+  ;; This works for both 1:1 and broadcast cases.
+  (define type (tensor-type out))
+  (define grad-out (tensor-grad out))
+  (define temp (alloc-tensor (tensor-length out) #:type (symbol->type type)))
+
+  (let-typed type
+    ([copy! cblas_dcopy cblas_scopy]
+     [scal! cblas_dscal cblas_sscal])
+    (copy! (tensor-length out) grad-out 1 temp 1)
+    (scal! (tensor-length out) -1.0 temp 1))
+
+  ;; Now treat 'temp' as the source gradient
+  ;; We need a version of accumulate-grad! that takes an explicit source buffer
+  ;; instead of (tensor-grad out).
+  (accumulate-grad-from-buffer! input-tensor out temp)
+  ;; Free temp? (GC handles it)
+  )
+
+;; Refactored helper to allow custom source gradient (e.g. for sub or mul)
+(define (accumulate-grad-from-buffer! input-tensor out-tensor source-grad-ptr)
+  (define type-A (tensor-type input-tensor))
+  (define in-shape (tensor-shape input-tensor))
+  (define out-shape (tensor-shape out-tensor))
+
+  (cond
+    [(equal? in-shape out-shape)
+     (let-typed type-A
+       ([axpy cblas_daxpy cblas_saxpy])
+       (axpy (tensor-length out-tensor) 1.0 source-grad-ptr 1 (tensor-grad input-tensor) 1))]
+
+    [else
+     (define rank-out (length out-shape))
+     (define pad-len  (- rank-out (length in-shape)))
+     (define padded-in-shape (append (make-list pad-len 1) in-shape))
+
+     (define-values (keep-shape keep-src-st keep-dst-st
+                                reduce-shape reduce-src-st)
+       (for/fold ([ks '()] [kss '()] [kds '()] [rs '()] [rss '()])
+                 ([d-in  (in-list padded-in-shape)]
+                  [d-out (in-list out-shape)]
+                  [st-out (in-list (tensor-strides out-tensor))]
+                  [st-in  (in-list (append (make-list pad-len 0) (tensor-strides input-tensor)))])
+         (cond
+           [(and (= d-in 1) (> d-out 1))
+            (values ks kss kds (cons d-out rs) (cons st-out rss))]
+           [else
+            (values (cons d-out ks) (cons st-out kss) (cons st-in kds) rs rss)])))
+
+     (let-typed-c type-A
+       ([reduce! _reduce_sum_generic])
+       (reduce! (length keep-shape)
+                (reverse keep-shape)
+                (reverse keep-src-st)
+                (reverse keep-dst-st)
+                (length reduce-shape)
+                (reverse reduce-shape)
+                (reverse reduce-src-st)
+                source-grad-ptr
+                (tensor-grad input-tensor)))]))
+
+(define+provide (tensor-div A B)
+  (define type-A (tensor-type A))
+  (define type-B (tensor-type B))
+
+  (unless (symbol=? type-A type-B)
+    (error 'tensor-div "both tensors should be of the same type, but were: ~a and ~a~n" type-A type-B))
+
+  (define shape-A (tensor-shape A))
+  (define shape-B (tensor-shape B))
+  (define strides-A (tensor-strides A))
+  (define strides-B (tensor-strides B))
+
+  (define-values (out-shape broadcast-strides-A broadcast-strides-B)
+    (broadcast-structs shape-A strides-A shape-B strides-B))
+
+  (define out (make-tensor out-shape #:type type-A #:children (list A B)))
+
+  (define A-grad? (not (empty? (tensor-grad A))))
+  (define B-grad? (not (empty? (tensor-grad B))))
+  (define grad? (or A-grad? B-grad?))
+
+  (when grad?
+    (unless (or (symbol=? type-A 'double) (symbol=? type-A 'float))
+      (raise-argument-error 'tensor-div "tensor:double or tensor:float" 0 A B))
+    (tensor-requires-grad! out)
+    (tensor-requires-grad! A)
+    (tensor-requires-grad! B))
+
+  (let-typed-c type-A
+    ([div! _div_broadcast])
+    (div! (length out-shape)
+          out-shape
+          (tensor-data A)
+          broadcast-strides-A
+          (tensor-data B)
+          broadcast-strides-B
+          (tensor-data out)))
+
+  (define (backward)
+    ;; C = A / B
+    ;; dA = dC / B = dC * (1/B)
+    ;; dB = -dC * A / B^2 = -dC * C / B
+
+    ;; For dA: Accumulate (dC / B)
+    (define inv-B (tensor-pow B (make-tensor '() -1.0 #:type type-B))) ;; 1/B
+    ;; Warning: Creating intermediate tensors here might be slow.
+    ;; Ideally we want a kernel "accumulate_div_grad(dC, B, dA)" and "accumulate_div_grad_B(dC, A, B, dB)"
+
+    ;; Using existing primitives for now to save dev time, optimize later if needed.
+    ;; But wait, tensor-pow isn't defined yet in Racket land (only C).
+    ;; Let's define tensor-pow first.
+    ;;
+    ;; Actually, let's just use the logic from tensor-mul backward but adapted.
+    ;; dA term: dC * (1/B). We need a temporary tensor for (1/B) broadcasted?
+    ;; No, dC is shape(out), B is shape(B).
+    ;; We can compute temp = dC / B (broadcasted).
+    ;; Then accumulate temp into A.
+
+    (define ndim (length out-shape))
+    (define temp-grad-A (alloc-tensor (tensor-length out) #:type (symbol->type type-A)))
+
+    ;; temp_A = grad_out / B
+    (let-typed-c type-A
+      ([div! _div_broadcast])
+      (div! ndim
+            out-shape
+            (tensor-grad out) (shape->strides out-shape)
+            (tensor-data B)   broadcast-strides-B
+            temp-grad-A))
+
+    (accumulate-grad-from-buffer! A out temp-grad-A)
+
+    ;; dB term: -dC * A / (B*B)
+    ;;        = - (dC * A / B^2)
+    ;;        = - (temp_A * A / B)
+    ;;        = - temp_A * (A/B)
+    ;;        = - temp_A * out  (since out = A/B)
+    ;; So dB term is -1 * temp_A * out.
+
+    (define temp-grad-B (alloc-tensor (tensor-length out) #:type (symbol->type type-A)))
+
+    ;; temp_B = temp_A * out
+    (let-typed-c type-A
+      ([mul! _mul_broadcast])
+      (mul! ndim
+            out-shape
+            temp-grad-A (shape->strides out-shape)
+            (tensor-data out) (shape->strides out-shape)
+            temp-grad-B))
+
+    ;; Negate temp_B
+    (let-typed type-A
+      ([scal! cblas_dscal cblas_sscal])
+      (scal! (tensor-length out) -1.0 temp-grad-B 1))
+
+    (accumulate-grad-from-buffer! B out temp-grad-B)
+    )
+
+  (when grad?
+    (set-tensor-backward! out backward))
+  out)
+
+
+(define+provide (tensor-pow A B)
+  (define type-A (tensor-type A))
+  (define type-B (tensor-type B))
+
+  (unless (symbol=? type-A type-B)
+    (error 'tensor-pow "both tensors should be of the same type"))
+
+  (define shape-A (tensor-shape A))
+  (define shape-B (tensor-shape B))
+  (define strides-A (tensor-strides A))
+  (define strides-B (tensor-strides B))
+
+  (define-values (out-shape broadcast-strides-A broadcast-strides-B)
+    (broadcast-structs shape-A strides-A shape-B strides-B))
+
+  (define out (make-tensor out-shape #:type type-A #:children (list A B)))
+
+  (define grad? (or (not (empty? (tensor-grad A))) (not (empty? (tensor-grad B)))))
+
+  (when grad?
+    (unless (or (symbol=? type-A 'double) (symbol=? type-A 'float))
+      (raise-argument-error 'tensor-pow "tensor:double or tensor:float" 0 A B))
+    (tensor-requires-grad! out A B))
+
+  (let-typed type-A
+    ([pow! _pow_broadcast_double _pow_broadcast_float])
+    (pow! (length out-shape)
+          out-shape
+          (tensor-data A) broadcast-strides-A
+          (tensor-data B) broadcast-strides-B
+          (tensor-data out)))
+
+  (define (backward)
+    ;; C = A ^ B
+    ;; dA = dC * B * A^(B-1) = dC * B * (C/A) = dC * C * B / A
+    ;; dB = dC * A^B * ln(A) = dC * C * ln(A)
+
+    (define ndim (length out-shape))
+    (define len (tensor-length out))
+    (define type (symbol->type type-A))
+
+    ;; Common term: dC * C
+    (define dC_C (alloc-tensor len #:type type))
+    (let-typed-c type-A
+      ([mul! _mul_broadcast])
+      (mul! ndim out-shape
+            (tensor-grad out) (shape->strides out-shape)
+            (tensor-data out) (shape->strides out-shape)
+            dC_C))
+
+    ;; dA term: (dC * C) * B / A
+    ;; temp = (dC_C * B) / A
+    (define temp-dA (alloc-tensor len #:type type))
+
+    ;; 1. temp = dC_C * B
+    (let-typed-c type-A
+      ([mul! _mul_broadcast])
+      (mul! ndim out-shape
+            dC_C (shape->strides out-shape)
+            (tensor-data B) broadcast-strides-B
+            temp-dA))
+
+    ;; 2. temp = temp / A
+    (let-typed-c type-A
+      ([div! _div_broadcast])
+      (div! ndim out-shape
+            temp-dA (shape->strides out-shape)
+            (tensor-data A) broadcast-strides-A
+            temp-dA))
+
+    (accumulate-grad-from-buffer! A out temp-dA)
+
+    ;; dB term: (dC * C) * ln(A)
+    ;; temp = dC_C * ln(A)
+    (define temp-dB (alloc-tensor len #:type type))
+    (define ln-A (alloc-tensor len #:type type))
+
+    ;; We need to compute ln(A) but broadcasted to out-shape!
+    ;; Or we can compute ln(A) in place? No A is const.
+    ;;
+    ;; Let's make a broadcasted copy of A, then log it.
+    ;; "copy broadcast" is just mul by 1s? Or add 0s.
+    (define ones (make-tensor '() 0.0 #:type type-A)) ;; 0s
+    (let-typed-c type-A
+      ([add! _add_broadcast])
+      (add! ndim out-shape
+            (tensor-data A) broadcast-strides-A
+            (tensor-data ones) (make-list ndim 0) ;; Broadcast 0, strides should be valid list of ints
+            ln-A))
+
+    ;; Now log(ln-A)
+    (let-typed type-A
+      ([log! _log_double _log_float])
+      (log! ln-A ln-A len))
+
+    ;; temp-dB = dC_C * ln-A
+    (let-typed-c type-A
+      ([mul! _mul_broadcast])
+      (mul! ndim out-shape
+            dC_C (shape->strides out-shape)
+            ln-A (shape->strides out-shape)
+            temp-dB))
+
+    (accumulate-grad-from-buffer! B out temp-dB)
+    )
+
+  (when grad?
+    (set-tensor-backward! out backward))
+  out)
+
+(define+provide (tensor-exp T)
+  (define type (tensor-type T))
+  (unless (or (symbol=? type 'double) (symbol=? type 'float))
+    (raise-argument-error 'tensor-exp "tensor:double or tensor:float" 0 T))
+
+  (define out (make-tensor (tensor-shape T) #:type type #:children (list T)))
+
+  (when (not (empty? (tensor-grad T)))
+    (tensor-requires-grad! out))
+
+  (let-typed type
+    ([exp! _exp_double _exp_float])
+    (exp! (tensor-data out) (tensor-data T) (tensor-length T)))
+
+  (define (backward)
+    ;; y = exp(x)
+    ;; dy/dx = y
+    ;; grad_in += grad_out * y
+    (define len (tensor-length T))
+    (let-typed-c type
+      ([mul-add! _mul_then_add])
+      (mul-add! (tensor-grad T)
+                (tensor-grad out)
+                (tensor-data out)
+                len)))
+
+  (when (not (empty? (tensor-grad T)))
+    (set-tensor-backward! out backward))
+  out)
+
+(define+provide (tensor-log T)
+  (define type (tensor-type T))
+  (unless (or (symbol=? type 'double) (symbol=? type 'float))
+    (raise-argument-error 'tensor-log "tensor:double or tensor:float" 0 T))
+
+  (define out (make-tensor (tensor-shape T) #:type type #:children (list T)))
+
+  (when (not (empty? (tensor-grad T)))
+    (tensor-requires-grad! out))
+
+  (let-typed type
+    ([log! _log_double _log_float])
+    (log! (tensor-data out) (tensor-data T) (tensor-length T)))
+
+  (define (backward)
+    ;; y = ln(x)
+    ;; dy/dx = 1/x
+    ;; grad_in += grad_out / x
+    ;; Since we don't have _div_then_add, we compute temp = grad_out/x then add?
+    ;; Or use: grad_out * (1/x).
+    ;; Let's alloc temp.
+    (define len (tensor-length T))
+    (define temp (alloc-tensor len #:type (symbol->type type)))
+
+    ;; temp = grad_out / x
+    (let-typed-c type
+      ([div! _div_broadcast])
+      ;; Using broadcast div with same shapes (effectively elementwise)
+      (div! (tensor-rank T) (tensor-shape T)
+            (tensor-grad out) (tensor-strides out)
+            (tensor-data T) (tensor-strides T)
+            temp))
+
+    ;; accumulate
+    (let-typed type
+      ([axpy cblas_daxpy cblas_saxpy])
+      (axpy len 1.0 temp 1 (tensor-grad T) 1)))
+
+  (when (not (empty? (tensor-grad T)))
+    (set-tensor-backward! out backward))
+  out)
+
 (define+provide (tensor-add A B)
   (define type-A (tensor-type A))
   (define type-B (tensor-type B))
@@ -475,6 +897,75 @@
 
   (when grad?
     (set-tensor-backward! out backward))
+  out)
+
+(define+provide (tensor-mul-out! out A B)
+  (define type-out (tensor-type out))
+  (define type-A (tensor-type A))
+  (define type-B (tensor-type B))
+
+  (unless (and (symbol=? type-out type-A) (symbol=? type-out type-B))
+    (error 'tensor-mul-out! "Type mismatch"))
+
+  (define shape-A (tensor-shape A))
+  (define shape-B (tensor-shape B))
+  (define strides-A (tensor-strides A))
+  (define strides-B (tensor-strides B))
+
+  (define-values (expected-shape broadcast-strides-A broadcast-strides-B)
+    (broadcast-structs shape-A strides-A shape-B strides-B))
+
+  (unless (equal? (tensor-shape out) expected-shape)
+    (error 'tensor-mul-out! "Shape mismatch"))
+
+  (define ptr-out (tensor-data out))
+  (define ptr-A (tensor-data A))
+  (define ptr-B (tensor-data B))
+
+  (when (or (equal? ptr-out ptr-A) (equal? ptr-out ptr-B))
+    (error 'tensor-mul-out! "Aliasing detected"))
+
+  (define grad? (or (not (empty? (tensor-grad A))) (not (empty? (tensor-grad B)))))
+
+  (cond
+    [grad?
+     (tensor-requires-grad! out A B)
+     (set-tensor-children! out (list A B))
+     (define (backward)
+       ;; Copied from tensor-mul backward logic
+       (define (accumulate-grad-mul! input-tensor other-tensor grad-out broadcast-strides-input broadcast-strides-other)
+         ;; ... (same logic as before, but accessing out/A/B from closure)
+         ;; We need to factor out the accumulation logic or duplicate it.
+         ;; Given the complexity, let's call the helper if we can.
+         ;; But the helper was internal to tensor-mul.
+         ;; Let's inline a simplified version using the new accumulate-grad-from-buffer!
+         (define ndim (length expected-shape))
+         (define temp-grad (alloc-tensor (tensor-length out) #:type (symbol->type type-A)))
+
+         (let-typed-c type-A
+           ([mul! _mul_broadcast])
+           (mul! ndim expected-shape
+                 grad-out (shape->strides expected-shape)
+                 (tensor-data other-tensor) broadcast-strides-other
+                 temp-grad))
+
+         (accumulate-grad-from-buffer! input-tensor out temp-grad))
+
+       (accumulate-grad-mul! A B (tensor-grad out) broadcast-strides-A broadcast-strides-B)
+       (accumulate-grad-mul! B A (tensor-grad out) broadcast-strides-B broadcast-strides-A))
+
+     (set-tensor-backward! out backward)]
+    [else
+     (set-tensor-children! out empty)
+     (set-tensor-backward! out void)])
+
+  (let-typed-c type-out
+    ([mul! _mul_broadcast])
+    (mul! (length expected-shape)
+          expected-shape
+          (tensor-data A) broadcast-strides-A
+          (tensor-data B) broadcast-strides-B
+          (tensor-data out)))
   out)
 
 (define+provide (tensor-matmul A B)

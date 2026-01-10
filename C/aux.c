@@ -161,6 +161,14 @@ GENERATE_MUL_ADD_FUNC(int64, int64_t)
 GENERATE_UNARY_FUNC(tanh, double, double, tanh)
 GENERATE_UNARY_FUNC(tanh, float, float, tanhf)
 
+// --- Exp ---
+GENERATE_UNARY_FUNC(exp, double, double, exp)
+GENERATE_UNARY_FUNC(exp, float, float, expf)
+
+// --- Log ---
+GENERATE_UNARY_FUNC(log, double, double, log)
+GENERATE_UNARY_FUNC(log, float, float, logf)
+
 // --- Sigmoid ---
 // sigmoid(x) = 1 / (1 + exp(-x))
 static inline double sigmoid_double(double x) { return 1.0 / (1.0 + exp(-x)); }
@@ -288,6 +296,209 @@ GENERATE_BROADCAST_ADD_FUNC(uint32, uint32_t)
 GENERATE_BROADCAST_ADD_FUNC(int32, int32_t)
 GENERATE_BROADCAST_ADD_FUNC(uint64, uint64_t)
 GENERATE_BROADCAST_ADD_FUNC(int64, int64_t)
+
+/* * Macro to generate generic Broadcast Sub Kernels
+ * Identical to Add, but with subtraction.
+ */
+#define GENERATE_BROADCAST_SUB_FUNC(SUFFIX, TYPE)                              \
+  API_EXPORT void _sub_broadcast_##SUFFIX(                                     \
+      uint64_t ndim, const int64_t *__restrict shape,                          \
+      const TYPE *__restrict A_data, const int64_t *__restrict A_strides,      \
+      const TYPE *__restrict B_data, const int64_t *__restrict B_strides,      \
+      TYPE *__restrict out_data) {                                             \
+                                                                               \
+    if (ndim == 0)                                                             \
+      return;                                                                  \
+    size_t inner_len = shape[ndim - 1];                                        \
+    size_t outer_len = 1;                                                      \
+    for (int i = 0; i < ndim - 1; i++)                                         \
+      outer_len *= shape[i];                                                   \
+                                                                               \
+    int64_t stride_A_inner = A_strides[ndim - 1];                              \
+    int64_t stride_B_inner = B_strides[ndim - 1];                              \
+                                                                               \
+    size_t total_bytes = outer_len * inner_len * sizeof(TYPE);                 \
+                                                                               \
+    if (total_bytes >= PARALLEL_THRESHOLD_BYTES) {                             \
+      _Pragma("omp parallel for schedule(static)") for (size_t i = 0;          \
+                                                        i < outer_len; i++) {  \
+        int64_t offA, offB;                                                    \
+        get_broadcast_offsets(i, ndim, shape, A_strides, B_strides, &offA,     \
+                              &offB);                                          \
+                                                                               \
+        _Pragma("omp simd") for (size_t j = 0; j < inner_len; j++) {           \
+          out_data[i * inner_len + j] = A_data[offA + j * stride_A_inner] -    \
+                                        B_data[offB + j * stride_B_inner];     \
+        }                                                                      \
+      }                                                                        \
+    } else {                                                                   \
+      for (size_t i = 0; i < outer_len; i++) {                                 \
+        int64_t offA, offB;                                                    \
+        get_broadcast_offsets(i, ndim, shape, A_strides, B_strides, &offA,     \
+                              &offB);                                          \
+                                                                               \
+        _Pragma("omp simd") for (size_t j = 0; j < inner_len; j++) {           \
+          out_data[i * inner_len + j] = A_data[offA + j * stride_A_inner] -    \
+                                        B_data[offB + j * stride_B_inner];     \
+        }                                                                      \
+      }                                                                        \
+    }                                                                          \
+  }
+
+GENERATE_BROADCAST_SUB_FUNC(double, double)
+GENERATE_BROADCAST_SUB_FUNC(float, float)
+GENERATE_BROADCAST_SUB_FUNC(uint8, uint8_t)
+GENERATE_BROADCAST_SUB_FUNC(int8, int8_t)
+GENERATE_BROADCAST_SUB_FUNC(uint16, uint16_t)
+GENERATE_BROADCAST_SUB_FUNC(int16, int16_t)
+GENERATE_BROADCAST_SUB_FUNC(uint32, uint32_t)
+GENERATE_BROADCAST_SUB_FUNC(int32, int32_t)
+GENERATE_BROADCAST_SUB_FUNC(uint64, uint64_t)
+GENERATE_BROADCAST_SUB_FUNC(int64, int64_t)
+
+/* * Macro to generate generic Broadcast Div Kernels
+ * Identical to Mul, but with division.
+ */
+#define GENERATE_BROADCAST_DIV_FUNC(SUFFIX, TYPE)                              \
+  API_EXPORT void _div_broadcast_##SUFFIX(                                     \
+      uint64_t ndim, const int64_t *__restrict shape,                          \
+      const TYPE *__restrict A_data, const int64_t *__restrict A_strides,      \
+      const TYPE *__restrict B_data, const int64_t *__restrict B_strides,      \
+      TYPE *__restrict out_data) {                                             \
+    if (ndim == 0)                                                             \
+      return;                                                                  \
+                                                                               \
+    size_t inner_len = shape[ndim - 1];                                        \
+    size_t outer_len = 1;                                                      \
+    for (int i = 0; i < ndim - 1; i++)                                         \
+      outer_len *= shape[i];                                                   \
+                                                                               \
+    int64_t stride_A_inner = A_strides[ndim - 1];                              \
+    int64_t stride_B_inner = B_strides[ndim - 1];                              \
+                                                                               \
+    /* OMP Parallel Region */                                                  \
+    _Pragma("omp parallel") {                                                  \
+      int thread_id = omp_get_thread_num();                                    \
+      int num_threads = omp_get_num_threads();                                 \
+      size_t chunk_size = (outer_len + num_threads - 1) / num_threads;         \
+      size_t start = thread_id * chunk_size;                                   \
+      size_t end = start + chunk_size;                                         \
+      if (end > outer_len)                                                     \
+        end = outer_len;                                                       \
+                                                                               \
+      if (start < end) {                                                       \
+        int64_t coords[32];                                                    \
+        int64_t offA = 0, offB = 0;                                            \
+                                                                               \
+        get_broadcast_coords(start, ndim, shape, coords);                      \
+                                                                               \
+        for (int d = 0; d < ndim - 1; d++) {                                   \
+          offA += coords[d] * A_strides[d];                                    \
+          offB += coords[d] * B_strides[d];                                    \
+        }                                                                      \
+                                                                               \
+        for (size_t i = start; i < end; i++) {                                 \
+          _Pragma("omp simd") for (size_t j = 0; j < inner_len; j++) {         \
+            out_data[i * inner_len + j] = A_data[offA + j * stride_A_inner] /  \
+                                          B_data[offB + j * stride_B_inner];   \
+          }                                                                    \
+                                                                               \
+          for (int d = ndim - 2; d >= 0; d--) {                                \
+            coords[d]++;                                                       \
+            if (coords[d] < shape[d]) {                                        \
+              offA += A_strides[d];                                            \
+              offB += B_strides[d];                                            \
+              break;                                                           \
+            } else {                                                           \
+              coords[d] = 0;                                                   \
+              offA -= A_strides[d] * (shape[d] - 1);                           \
+              offB -= B_strides[d] * (shape[d] - 1);                           \
+            }                                                                  \
+          }                                                                    \
+        }                                                                      \
+      }                                                                        \
+    }                                                                          \
+  }
+GENERATE_BROADCAST_DIV_FUNC(double, double)
+GENERATE_BROADCAST_DIV_FUNC(float, float)
+GENERATE_BROADCAST_DIV_FUNC(uint8, uint8_t)
+GENERATE_BROADCAST_DIV_FUNC(int8, int8_t)
+GENERATE_BROADCAST_DIV_FUNC(uint16, uint16_t)
+GENERATE_BROADCAST_DIV_FUNC(int16, int16_t)
+GENERATE_BROADCAST_DIV_FUNC(uint32, uint32_t)
+GENERATE_BROADCAST_DIV_FUNC(int32, int32_t)
+GENERATE_BROADCAST_DIV_FUNC(uint64, uint64_t)
+GENERATE_BROADCAST_DIV_FUNC(int64, int64_t)
+
+/* * Macro to generate generic Broadcast Pow Kernels
+ */
+#define GENERATE_BROADCAST_POW_FUNC(SUFFIX, TYPE, POW_FUNC)                    \
+  API_EXPORT void _pow_broadcast_##SUFFIX(                                     \
+      uint64_t ndim, const int64_t *__restrict shape,                          \
+      const TYPE *__restrict A_data, const int64_t *__restrict A_strides,      \
+      const TYPE *__restrict B_data, const int64_t *__restrict B_strides,      \
+      TYPE *__restrict out_data) {                                             \
+    if (ndim == 0)                                                             \
+      return;                                                                  \
+                                                                               \
+    size_t inner_len = shape[ndim - 1];                                        \
+    size_t outer_len = 1;                                                      \
+    for (int i = 0; i < ndim - 1; i++)                                         \
+      outer_len *= shape[i];                                                   \
+                                                                               \
+    int64_t stride_A_inner = A_strides[ndim - 1];                              \
+    int64_t stride_B_inner = B_strides[ndim - 1];                              \
+                                                                               \
+    _Pragma("omp parallel") {                                                  \
+      int thread_id = omp_get_thread_num();                                    \
+      int num_threads = omp_get_num_threads();                                 \
+      size_t chunk_size = (outer_len + num_threads - 1) / num_threads;         \
+      size_t start = thread_id * chunk_size;                                   \
+      size_t end = start + chunk_size;                                         \
+      if (end > outer_len)                                                     \
+        end = outer_len;                                                       \
+                                                                               \
+      if (start < end) {                                                       \
+        int64_t coords[32];                                                    \
+        int64_t offA = 0, offB = 0;                                            \
+                                                                               \
+        get_broadcast_coords(start, ndim, shape, coords);                      \
+                                                                               \
+        for (int d = 0; d < ndim - 1; d++) {                                   \
+          offA += coords[d] * A_strides[d];                                    \
+          offB += coords[d] * B_strides[d];                                    \
+        }                                                                      \
+                                                                               \
+        for (size_t i = start; i < end; i++) {                                 \
+          /* pow might not be vectorizable easily, removing simd for safety */ \
+          for (size_t j = 0; j < inner_len; j++) {                             \
+            out_data[i * inner_len + j] =                                      \
+                POW_FUNC(A_data[offA + j * stride_A_inner],                    \
+                         B_data[offB + j * stride_B_inner]);                   \
+          }                                                                    \
+                                                                               \
+          for (int d = ndim - 2; d >= 0; d--) {                                \
+            coords[d]++;                                                       \
+            if (coords[d] < shape[d]) {                                        \
+              offA += A_strides[d];                                            \
+              offB += B_strides[d];                                            \
+              break;                                                           \
+            } else {                                                           \
+              coords[d] = 0;                                                   \
+              offA -= A_strides[d] * (shape[d] - 1);                           \
+              offB -= B_strides[d] * (shape[d] - 1);                           \
+            }                                                                  \
+          }                                                                    \
+        }                                                                      \
+      }                                                                        \
+    }                                                                          \
+  }
+
+GENERATE_BROADCAST_POW_FUNC(double, double, pow)
+GENERATE_BROADCAST_POW_FUNC(float, float, powf)
+// For integers, we probably shouldn't support pow natively or cast to double?
+// Let's stick to float/double for pow for now as it's the most common use case
+// for tensors.
 
 /* * Macro to generate generic Broadcast Mul Kernels
  * Identical to Add, but with multiplication.

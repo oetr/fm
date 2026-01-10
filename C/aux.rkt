@@ -94,6 +94,18 @@
         (len : _ulong)
         -> _void))
 
+(define+provide-aux* _exp (_double _float)
+  (_fun (out : _gcpointer)
+        (in  : _gcpointer)
+        (len : _ulong)
+        -> _void))
+
+(define+provide-aux* _log (_double _float)
+  (_fun (out : _gcpointer)
+        (in  : _gcpointer)
+        (len : _ulong)
+        -> _void))
+
 (define+provide-aux* _sigmoid (_double _float)
   (_fun (out : _gcpointer)
         (in  : _gcpointer)
@@ -125,6 +137,36 @@
         -> _void))
 
 (define+provide-aux* _mul_broadcast *all-types-without-complex*
+  (_fun (ndim      : _ulong)
+        (shape     : (_list i _uint64))
+        (A-data    : _gcpointer)
+        (A-strides : (_list i _uint64))
+        (B-data    : _gcpointer)
+        (B-strides : (_list i _uint64))
+        (out-data  : _gcpointer)
+        -> _void))
+
+(define+provide-aux* _sub_broadcast *all-types-without-complex*
+  (_fun (ndim      : _ulong)
+        (shape     : (_list i _uint64))
+        (A-data    : _gcpointer)
+        (A-strides : (_list i _uint64))
+        (B-data    : _gcpointer)
+        (B-strides : (_list i _uint64))
+        (out-data  : _gcpointer)
+        -> _void))
+
+(define+provide-aux* _div_broadcast *all-types-without-complex*
+  (_fun (ndim      : _ulong)
+        (shape     : (_list i _uint64))
+        (A-data    : _gcpointer)
+        (A-strides : (_list i _uint64))
+        (B-data    : _gcpointer)
+        (B-strides : (_list i _uint64))
+        (out-data  : _gcpointer)
+        -> _void))
+
+(define+provide-aux* _pow_broadcast (_double _float)
   (_fun (ndim      : _ulong)
         (shape     : (_list i _uint64))
         (A-data    : _gcpointer)
