@@ -177,7 +177,7 @@
      #'(begin
          (reset-labels!)
          (displayln (format "// Kernel: ~a" 'name))
-         (displayln ".version 7.0\n.target sm_50\n.address_size 64\n")
+         (displayln ".version 8.5\n.target sm_86\n.address_size 64\n")
 
          (printf ".visible .entry ~a(\n" 'name)
          (displayln (string-join

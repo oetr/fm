@@ -14,7 +14,7 @@
 ;; or we capture stdout.
 
 (define (get-my-kernel-ptx)
-  (with-output-to-string
+  (with-output-to-bytes
     (lambda ()
       (kernel myTensorAdd
         #:params ((u64 ptr_A) (u64 ptr_B) (u64 ptr_C))
@@ -35,7 +35,7 @@
 
 ;; RTX 3090
 ;; TODO: get the GPU arch from CUDA API
-(define sass-binary (compile-ptx-to-sass ptx-source "sm_86" #:path "/usr/local/cuda-12.5/bin/ptxas"))
+;;(define sass-binary (compile-ptx-to-sass ptx-source "sm_86" #:path "/usr/local/cuda-12.5/bin/ptxas"))
 
 ;; wrap GPU pointers in C pointers to be passed to cuLaunchKernel 
 (define (pack-kernel-mem-args . args)
@@ -46,10 +46,9 @@
      mem)
    _pointer))
 
-
 (printf "\nReady to Launch!\n")
 (printf "Kernel Name: myTensorAdd\n")
-(printf "Binary Size: ~a bytes\n" (bytes-length sass-binary))
+(printf "Binary Size: ~a bytes\n" (bytes-length ptx-source))
 (printf "Arguments (Raw GPU Addresses):\n")
 
 ;; ---------------------------------------------------------
@@ -60,7 +59,7 @@
 ;;(define device 0)
 (define context (cuCtxCreate 0 device))
 
-(define mod (cuModuleLoadData sass-binary))
+(define mod (cuModuleLoadData ptx-source))
 (define func (cuModuleGetFunction mod "myTensorAdd"))
 
 (define cpu-A (malloc 1 _float))
