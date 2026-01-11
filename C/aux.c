@@ -733,12 +733,12 @@ GENERATE_GENERIC_REDUCE(uint8, uint8_t)
       const size_t *keep_B_strides,   /* Stride in other_tensor */             \
       const size_t *keep_dst_strides, /* Stride in accumulator */              \
       const size_t n_reduce,                                                   \
-      const size_t *reduce_shape,       /* Shape of collapsed dimensions */    \
-      const size_t *reduce_A_strides,   /* Stride in grad_out */               \
-      const size_t *reduce_B_strides,   /* Stride in other_tensor */           \
-      const TYPE *__restrict A_data,    /* grad_out */                         \
-      const TYPE *__restrict B_data,    /* other_tensor */                     \
-      TYPE *__restrict dst_data) {      /* accumulator */                      \
+      const size_t *reduce_shape,     /* Shape of collapsed dimensions */      \
+      const size_t *reduce_A_strides, /* Stride in grad_out */                 \
+      const size_t *reduce_B_strides, /* Stride in other_tensor */             \
+      const TYPE *__restrict A_data,  /* grad_out */                           \
+      const TYPE *__restrict B_data,  /* other_tensor */                       \
+      TYPE *__restrict dst_data) {    /* accumulator */                        \
                                                                                \
     /* 1. Calculate total iterations */                                        \
     size_t total_keep = 1;                                                     \
@@ -761,8 +761,10 @@ GENERATE_GENERIC_REDUCE(uint8, uint8_t)
                                                                                \
       /* 3. Inner Loop over the Reduction Volume */                            \
       for (size_t j = 0; j < total_reduce; j++) {                              \
-        size_t A_off = get_offset(j, n_reduce, reduce_shape, reduce_A_strides);\
-        size_t B_off = get_offset(j, n_reduce, reduce_shape, reduce_B_strides);\
+        size_t A_off =                                                         \
+            get_offset(j, n_reduce, reduce_shape, reduce_A_strides);           \
+        size_t B_off =                                                         \
+            get_offset(j, n_reduce, reduce_shape, reduce_B_strides);           \
                                                                                \
         sum += A_data[A_base + A_off] * B_data[B_base + B_off];                \
       }                                                                        \

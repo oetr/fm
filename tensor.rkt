@@ -351,7 +351,7 @@
 (define (accumulate-grad-mul-fused! input-tensor other-tensor grad-out broadcast-strides-other out-shape)
   (define type-A (tensor-type input-tensor))
   (define in-shape (tensor-shape input-tensor))
-  
+
   (cond
     ;; Optimization: Simple 1:1 match
     [(equal? in-shape out-shape)
@@ -367,7 +367,7 @@
       (define pad-len  (- rank-out (length in-shape)))
       (define full-input-strides (append (make-list pad-len 0) (tensor-strides input-tensor)))
       (define grad-out-strides (shape->strides out-shape))
-      
+
       (define-values (keep-shape keep-A-st keep-B-st keep-dst-st
                                  reduce-shape reduce-A-st reduce-B-st)
         (for/fold ([ks '()] [kas '()] [kbs '()] [kds '()]
@@ -379,7 +379,7 @@
                    [st-dst (in-list full-input-strides)])
           (cond
             [(and (= d-in 1) (> d-out 1))
-             (values ks kas kbs kds 
+             (values ks kas kbs kds
                      (cons d-out rs) (cons st-A ras) (cons st-B rbs))]
             [else
              (values (cons d-out ks) (cons st-A kas) (cons st-B kbs) (cons st-dst kds)
