@@ -20,9 +20,9 @@
         #:params ((u64 ptr_A) (u64 ptr_B) (u64 ptr_C))
         ;; Added %valB to hold the second number
         #:regs   ((f32 %valA) (f32 %valB) (f32 %sum))
-        
+
         (ld.global f32 %valA (%ptr_A))
-        (ld.global f32 %valB (%ptr_B)) 
+        (ld.global f32 %valB (%ptr_B))
         (add f32 %sum %valA %valB)
         (st.global f32 (%ptr_C) %sum)
         (ret)))))
@@ -37,7 +37,7 @@
 ;; TODO: get the GPU arch from CUDA API
 ;;(define sass-binary (compile-ptx-to-sass ptx-source "sm_86" #:path "/usr/local/cuda-12.5/bin/ptxas"))
 
-;; wrap GPU pointers in C pointers to be passed to cuLaunchKernel 
+;; wrap GPU pointers in C pointers to be passed to cuLaunchKernel
 (define (pack-kernel-mem-args . args)
   (list->cblock
    (for/list ([arg args])

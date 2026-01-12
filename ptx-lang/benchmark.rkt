@@ -36,12 +36,12 @@
 
   ;; 2. Initialize cuBLAS (It attaches to the pushed Driver context automatically)
   (define handle (cublasCreate_v2))
-  
+
 
   ;; 3. Setup Data
   (define size (* N N))
   (define bytes (* size (ctype-sizeof _float)))
-  
+
   (define h_A (make-float-array size))
   (define h_B (make-float-array size))
   ;; (Fill h_A/h_B with random data here if needed)
@@ -53,7 +53,7 @@
 
   ;;(define alpha_addr (cuMemAlloc_v2 4))
   ;;(define beta_addr (cuMemAlloc_v2 4))
-  
+
   ;; 5. Copy HtoD
   (cuMemcpyHtoD_v2 d_A_addr (cvector-ptr h_A) bytes)
   (cuMemcpyHtoD_v2 d_B_addr (cvector-ptr h_B) bytes)
@@ -62,7 +62,7 @@
   (define d_A_ptr (->ptr d_A_addr))
   (define d_B_ptr (->ptr d_B_addr))
   (define d_C_ptr (->ptr d_C_addr))
-  
+
   (define alpha (make-scalar-ptr 1.0))
   (define beta  (make-scalar-ptr 0.0))
 
