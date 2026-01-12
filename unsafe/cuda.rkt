@@ -29,14 +29,66 @@
                (error 'cuDeviceGet "error with result: ~a" result))))
 
 (define+provide-cuda cuCtxCreate
-  (_fun (context : _pointer = (let ([ptr (malloc _uint 'atomic)])
-                                ptr))
+  (_fun (context : (_ptr o _pointer atomic))
         (flags : _uint)
         (device : _int)
         -> (result : cu-result)
         -> (if (symbol=? 'CUDA_SUCCESS result)
                context
                (error 'cuCtxCreate "error with result: ~a" result))))
+
+(define+provide-cuda cuCtxDestroy
+  (_fun (ctx : _pointer)
+        -> (result : cu-result)
+        -> (unless (symbol=? 'CUDA_SUCCESS result)
+             (error 'cuCtxDestroy "error with result: ~a" result))))
+
+(define+provide-cuda cuCtxAttach
+  (_fun (ctx : _pointer)
+        (flags : _int)
+        -> (result : cu-result)
+        -> (unless (symbol=? 'CUDA_SUCCESS result)
+             (error 'cuCtxAttach "error with result: ~a" result))))
+
+(define+provide-cuda cuDevicePrimaryCtxRetain
+  (_fun (pctx : (_ptr o _pointer atomic))
+        (dev  : _int)
+        -> (result : cu-result)
+        -> (if (symbol=? 'CUDA_SUCCESS result)
+               pctx
+               (error 'cuDevicePrimaryCtxRetain "error with result: ~a" result))))
+
+(define+provide-cuda cuCtxSetCurrent
+  (_fun (ctx : _pointer)
+        -> (result : cu-result)
+        -> (unless (symbol=? 'CUDA_SUCCESS result)
+             (error 'cuCtxSetCurrent "error with result: ~a" result))))
+
+(define+provide-cuda cuCtxGetCurrent
+  (_fun (ctx : (_ptr o _pointer atomic))
+        -> (result : cu-result)
+        -> (if (symbol=? 'CUDA_SUCCESS result)
+               ctx
+               (error 'cuCtxGetCurrent "error with result: ~a" result))))
+
+(define+provide-cuda cuCtxPopCurrent_v2
+  (_fun (ctx : (_ptr io _pointer atomic))
+        -> (result : cu-result)
+        -> (unless (symbol=? 'CUDA_SUCCESS result)
+             (error 'cuCtxPushCurrent_v2 "error with result: ~a" result))))
+
+(define+provide-cuda cuCtxPushCurrent_v2
+  (_fun (ctx : _pointer)
+        -> (result : cu-result)
+        -> (unless (symbol=? 'CUDA_SUCCESS result)
+             (error 'cuCtxPushCurrent_v2 "error with result: ~a" result))))
+
+
+(define+provide-cuda cuDevicePrimaryCtxRelease_v2
+  (_fun (dev : _int)
+        -> (result : cu-result)
+        -> (unless (symbol=? 'CUDA_SUCCESS result)
+               (error 'cuDevicePrimaryCtxRelease_v2 "error with result: ~a" result))))
 
 (define+provide-cuda cuMemAlloc
   (_fun (ptr : _pointer = (malloc _pointer 'atomic))
@@ -46,7 +98,18 @@
                ptr
                (error "CUDA Malloc failed: " result))))
 
+(define+provide-cuda cuMemAlloc_v2
+  (_fun (ptr : (_ptr o _uint64 atomic))
+        _size
+        -> (result : cu-result)
+        -> (if (symbol=? 'CUDA_SUCCESS result)
+               ptr
+               (error "CUDA Malloc failed: " result))))
+
 (define+provide-cuda cuMemFree
+  (_fun _uint64 -> _int))
+
+(define+provide-cuda cuMemFree_v2
   (_fun _uint64 -> _int))
 
 (define+provide-cuda cuModuleLoadData
@@ -90,6 +153,14 @@
         -> (unless (symbol=? 'CUDA_SUCCESS result)
              (error 'cuMemcpyDtoH "failed: ~a" result))))
 
+(define+provide-cuda cuMemcpyDtoH_v2
+  (_fun (dstHost   : _pointer)
+        (srcDevice : _uint64)
+        (byteCount : _size)
+        -> (result : cu-result)
+        -> (unless (symbol=? 'CUDA_SUCCESS result)
+             (error 'cuMemcpyDtoH_v2 "failed: ~a" result))))
+
 (define+provide-cuda cuMemcpyHtoD
   (_fun (dstDevice : _uint64)
         (srcHost   : _pointer)
@@ -97,3 +168,16 @@
         -> (result : cu-result)
         -> (unless (symbol=? 'CUDA_SUCCESS result)
              (error 'cuMemcpyHtoD "failed: ~a" result))))
+
+(define+provide-cuda cuMemcpyHtoD_v2
+  (_fun (dstDevice : _uint64)
+        (srcHost   : _pointer)
+        (byteCount : _size)
+        -> (result : cu-result)
+        -> (unless (symbol=? 'CUDA_SUCCESS result)
+             (error 'cuMemcpyHtoD_v2 "failed: ~a" result))))
+
+(define+provide-cuda cuCtxSynchronize
+  (_fun -> (result : cu-result)
+        -> (unless (symbol=? 'CUDA_SUCCESS result)
+             (error 'cuCtxSynchronize "failed: ~a" result))))
