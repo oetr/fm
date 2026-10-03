@@ -11,3 +11,4 @@
 (define pkg-desc "A fast math library")
 (define pkg-autors '("Peter Samarin"))
 (define license 'AGPL-3.0-only)
+(define build-deps '("rackunit-lib"))
